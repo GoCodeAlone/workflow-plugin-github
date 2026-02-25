@@ -1,0 +1,23 @@
+{
+    "name": "workflow-plugin-github",
+    "version": "1.0.0",
+    "description": "GitHub integration plugin: webhook handling and GitHub Actions workflow management",
+    "author": "GoCodeAlone",
+    "license": "MIT",
+    "type": "external",
+    "tier": "community",
+    "minEngineVersion": "0.2.0",
+    "keywords": ["github", "webhook", "git", "actions", "ci", "cd", "integration"],
+    "homepage": "https://github.com/GoCodeAlone/workflow-plugin-github",
+    "repository": "https://github.com/GoCodeAlone/workflow-plugin-github",
+    "capabilities": {
+        "configProvider": false,
+        "moduleTypes": ["git.webhook"],
+        "stepTypes": [
+            "step.gh_action_trigger",
+            "step.gh_action_status",
+            "step.gh_create_check"
+        ],
+        "triggerTypes": []
+    }
+}
