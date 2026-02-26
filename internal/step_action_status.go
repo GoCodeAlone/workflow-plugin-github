@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
@@ -33,6 +34,7 @@ type actionStatusConfig struct {
 	Owner        string        `yaml:"owner"`
 	Repo         string        `yaml:"repo"`
 	RunID        int64         `yaml:"run_id"`
+	RunIDRaw     string        // raw string value for dynamic {{.field}} resolution
 	Token        string        `yaml:"token"`
 	Wait         bool          `yaml:"wait"`
 	PollInterval time.Duration `yaml:"poll_interval"`
@@ -70,6 +72,8 @@ func parseActionStatusConfig(raw map[string]any) (actionStatusConfig, error) {
 	}
 
 	// run_id can be provided as int, int64, float64, or string.
+	// When the string contains a template reference (e.g. {{.steps.trigger.run_id}})
+	// the literal value is stored in RunIDRaw and resolved at Execute time.
 	switch v := raw["run_id"].(type) {
 	case int:
 		cfg.RunID = int64(v)
@@ -79,14 +83,18 @@ func parseActionStatusConfig(raw map[string]any) (actionStatusConfig, error) {
 		cfg.RunID = int64(v)
 	case string:
 		if v != "" {
-			n, err := strconv.ParseInt(v, 10, 64)
-			if err != nil {
-				return cfg, fmt.Errorf("config.run_id is not a valid integer: %w", err)
+			if strings.Contains(v, "{{") {
+				cfg.RunIDRaw = v
+			} else {
+				n, err := strconv.ParseInt(v, 10, 64)
+				if err != nil {
+					return cfg, fmt.Errorf("config.run_id is not a valid integer: %w", err)
+				}
+				cfg.RunID = n
 			}
-			cfg.RunID = n
 		}
 	}
-	if cfg.RunID == 0 {
+	if cfg.RunID == 0 && cfg.RunIDRaw == "" {
 		return cfg, fmt.Errorf("config.run_id is required")
 	}
 
@@ -118,12 +126,14 @@ func parseActionStatusConfig(raw map[string]any) (actionStatusConfig, error) {
 }
 
 // Execute checks the status of the configured workflow run.
+// triggerData, stepOutputs, and current are used to resolve dynamic field
+// references (e.g. {{.steps.trigger.run_id}}) in owner, repo, and run_id.
 // When wait=true it polls until the run completes or the timeout elapses.
 func (s *actionStatusStep) Execute(
 	ctx context.Context,
-	_ map[string]any,
-	_ map[string]map[string]any,
-	_ map[string]any,
+	triggerData map[string]any,
+	stepOutputs map[string]map[string]any,
+	current map[string]any,
 	_ map[string]any,
 ) (*sdk.StepResult, error) {
 	token := s.config.Token
@@ -131,14 +141,32 @@ func (s *actionStatusStep) Execute(
 		return errorResult("GITHUB_TOKEN is not configured"), nil
 	}
 
+	// Resolve dynamic owner / repo.
+	owner := resolveField(s.config.Owner, triggerData, stepOutputs, current)
+	repo := resolveField(s.config.Repo, triggerData, stepOutputs, current)
+
+	// Resolve run_id — may be a static int or a dynamic template reference.
+	runID := s.config.RunID
+	if s.config.RunIDRaw != "" {
+		resolved := resolveField(s.config.RunIDRaw, triggerData, stepOutputs, current)
+		n, err := strconv.ParseInt(resolved, 10, 64)
+		if err != nil {
+			return errorResult(fmt.Sprintf("run_id resolved to non-integer value %q: %v", resolved, err)), nil
+		}
+		runID = n
+	}
+	if runID == 0 {
+		return errorResult("run_id resolved to zero — check pipeline context"), nil
+	}
+
 	if !s.config.Wait {
-		return s.fetchStatus(ctx, token)
+		return s.fetchStatusDynamic(ctx, owner, repo, runID, token)
 	}
 
 	// Poll with timeout.
 	deadline := time.Now().Add(s.config.Timeout)
 	for {
-		result, err := s.fetchStatus(ctx, token)
+		result, err := s.fetchStatusDynamic(ctx, owner, repo, runID, token)
 		if err != nil {
 			return nil, err
 		}
@@ -149,7 +177,7 @@ func (s *actionStatusStep) Execute(
 		}
 
 		if time.Now().After(deadline) {
-			return errorResult(fmt.Sprintf("timeout waiting for workflow run %d after %s", s.config.RunID, s.config.Timeout)), nil
+			return errorResult(fmt.Sprintf("timeout waiting for workflow run %d after %s", runID, s.config.Timeout)), nil
 		}
 
 		select {
@@ -160,9 +188,10 @@ func (s *actionStatusStep) Execute(
 	}
 }
 
-// fetchStatus retrieves the current state of the workflow run from the GitHub API.
-func (s *actionStatusStep) fetchStatus(ctx context.Context, token string) (*sdk.StepResult, error) {
-	run, err := s.ghClient.GetWorkflowRun(ctx, s.config.Owner, s.config.Repo, s.config.RunID, token)
+// fetchStatusDynamic retrieves the current state of a workflow run from the
+// GitHub API using caller-supplied (already-resolved) owner, repo, and runID.
+func (s *actionStatusStep) fetchStatusDynamic(ctx context.Context, owner, repo string, runID int64, token string) (*sdk.StepResult, error) {
+	run, err := s.ghClient.GetWorkflowRun(ctx, owner, repo, runID, token)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to get workflow run: %v", err)), nil
 	}
