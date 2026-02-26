@@ -100,12 +100,9 @@ func (m *webhookModule) SetMessageSubscriber(_ sdk.MessageSubscriber) {}
 // Init is a no-op; the module is ready after construction.
 func (m *webhookModule) Init() error { return nil }
 
-// Start registers the HTTP webhook handler with the global mux.
-// The engine must be running its HTTP server for this to receive requests.
-func (m *webhookModule) Start(_ context.Context) error {
-	http.HandleFunc("/webhooks/github", m.handleWebhook)
-	return nil
-}
+// Start is a no-op; the webhook route is declared via ConfigFragment so the
+// engine's HTTP server registers it through the normal config pipeline.
+func (m *webhookModule) Start(_ context.Context) error { return nil }
 
 // Stop is a no-op.
 func (m *webhookModule) Stop(_ context.Context) error { return nil }
