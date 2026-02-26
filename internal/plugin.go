@@ -6,6 +6,20 @@ import (
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
+// webhookRouteConfig is the config fragment YAML that declares the GitHub
+// webhook HTTP route so the engine's HTTP server registers it via the normal
+// config pipeline instead of the unreachable global DefaultServeMux.
+const webhookRouteConfig = `
+workflows:
+  github-webhook-receiver:
+    triggers:
+      - type: http
+        config:
+          path: /webhooks/github
+          method: POST
+    steps: []
+`
+
 // githubPlugin implements sdk.PluginProvider, sdk.ModuleProvider, and sdk.StepProvider.
 type githubPlugin struct{}
 
@@ -60,4 +74,12 @@ func (p *githubPlugin) CreateStep(typeName, name string, config map[string]any) 
 	default:
 		return nil, fmt.Errorf("github plugin: unknown step type %q", typeName)
 	}
+}
+
+// ConfigFragment implements sdk.ConfigProvider.
+// It returns a config fragment that declares the /webhooks/github HTTP route
+// so the engine registers it through the normal config pipeline rather than
+// through the global DefaultServeMux (which is unreachable in a gRPC plugin).
+func (p *githubPlugin) ConfigFragment() ([]byte, error) {
+	return []byte(webhookRouteConfig), nil
 }

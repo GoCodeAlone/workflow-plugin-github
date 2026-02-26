@@ -90,6 +90,7 @@ func parseCreateCheckConfig(raw map[string]any) (createCheckConfig, error) {
 	}
 
 	cfg.SHA, _ = raw["sha"].(string)
+	// sha may be a dynamic template reference (e.g. {{.commit}}) resolved at Execute time.
 	if cfg.SHA == "" {
 		return cfg, fmt.Errorf("config.sha is required")
 	}
@@ -125,11 +126,13 @@ func parseCreateCheckConfig(raw map[string]any) (createCheckConfig, error) {
 }
 
 // Execute creates the GitHub Check Run.
+// triggerData, stepOutputs, and current are used to resolve dynamic field
+// references (e.g. {{.commit}}, {{.steps.prev.sha}}) in owner, repo, and sha.
 func (s *createCheckStep) Execute(
 	ctx context.Context,
-	_ map[string]any,
-	_ map[string]map[string]any,
-	_ map[string]any,
+	triggerData map[string]any,
+	stepOutputs map[string]map[string]any,
+	current map[string]any,
 	_ map[string]any,
 ) (*sdk.StepResult, error) {
 	token := s.config.Token
@@ -137,9 +140,13 @@ func (s *createCheckStep) Execute(
 		return errorResult("GITHUB_TOKEN is not configured"), nil
 	}
 
+	owner := resolveField(s.config.Owner, triggerData, stepOutputs, current)
+	repo := resolveField(s.config.Repo, triggerData, stepOutputs, current)
+	sha := resolveField(s.config.SHA, triggerData, stepOutputs, current)
+
 	req := &CreateCheckRunRequest{
 		Name:       s.config.Name,
-		HeadSHA:    s.config.SHA,
+		HeadSHA:    sha,
 		Status:     s.config.Status,
 		Conclusion: s.config.Conclusion,
 	}
@@ -151,7 +158,7 @@ func (s *createCheckStep) Execute(
 		}
 	}
 
-	check, err := s.ghClient.CreateCheckRun(ctx, s.config.Owner, s.config.Repo, req, token)
+	check, err := s.ghClient.CreateCheckRun(ctx, owner, repo, req, token)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to create check run: %v", err)), nil
 	}

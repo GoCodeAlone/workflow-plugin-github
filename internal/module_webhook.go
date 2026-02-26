@@ -6,7 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -98,12 +100,9 @@ func (m *webhookModule) SetMessageSubscriber(_ sdk.MessageSubscriber) {}
 // Init is a no-op; the module is ready after construction.
 func (m *webhookModule) Init() error { return nil }
 
-// Start registers the HTTP webhook handler with the global mux.
-// The engine must be running its HTTP server for this to receive requests.
-func (m *webhookModule) Start(_ context.Context) error {
-	http.HandleFunc("/webhooks/github", m.handleWebhook)
-	return nil
-}
+// Start is a no-op; the webhook route is declared via ConfigFragment so the
+// engine's HTTP server registers it through the normal config pipeline.
+func (m *webhookModule) Start(_ context.Context) error { return nil }
 
 // Stop is a no-op.
 func (m *webhookModule) Stop(_ context.Context) error { return nil }
@@ -306,27 +305,16 @@ func normalizeGenericEvent(event *GitEvent, payload map[string]any) {
 }
 
 // readLimitedBody reads up to maxBytes from the request body.
+// It uses io.LimitReader to cap reads safely without requiring a ResponseWriter.
+// If the body is exactly maxBytes, an extra byte is attempted to detect overflow.
 func readLimitedBody(r *http.Request, maxBytes int64) ([]byte, error) {
-	r.Body = http.MaxBytesReader(nil, r.Body, maxBytes)
-	buf := make([]byte, 0, 4096)
-	tmp := make([]byte, 4096)
-	var total int64
-	for {
-		n, err := r.Body.Read(tmp)
-		if n > 0 {
-			total += int64(n)
-			if total > maxBytes {
-				return nil, fmt.Errorf("request body exceeds %d bytes", maxBytes)
-			}
-			buf = append(buf, tmp[:n]...)
-		}
-		if err != nil {
-			if err.Error() == "EOF" || err.Error() == "http: request body too large" {
-				break
-			}
-			// io.EOF is expected at end of body
-			break
-		}
+	lr := io.LimitReader(r.Body, maxBytes+1)
+	buf, err := io.ReadAll(lr)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("failed to read request body: %w", err)
+	}
+	if int64(len(buf)) > maxBytes {
+		return nil, fmt.Errorf("request body exceeds %d bytes", maxBytes)
 	}
 	return buf, nil
 }

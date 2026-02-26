@@ -92,12 +92,13 @@ func parseActionTriggerConfig(raw map[string]any) (actionTriggerConfig, error) {
 }
 
 // Execute triggers the configured GitHub Actions workflow.
-// It returns the trigger confirmation and stops on error.
+// triggerData, stepOutputs, and current are used to resolve dynamic field
+// references (e.g. {{.owner}}, {{.steps.prev.ref}}) in the config values.
 func (s *actionTriggerStep) Execute(
 	ctx context.Context,
-	_ map[string]any,
-	_ map[string]map[string]any,
-	_ map[string]any,
+	triggerData map[string]any,
+	stepOutputs map[string]map[string]any,
+	current map[string]any,
 	_ map[string]any,
 ) (*sdk.StepResult, error) {
 	token := s.config.Token
@@ -105,15 +106,18 @@ func (s *actionTriggerStep) Execute(
 		return errorResult("GITHUB_TOKEN is not configured"), nil
 	}
 
-	err := s.ghClient.TriggerWorkflow(
-		ctx,
-		s.config.Owner,
-		s.config.Repo,
-		s.config.Workflow,
-		s.config.Ref,
-		s.config.Inputs,
-		token,
-	)
+	owner := resolveField(s.config.Owner, triggerData, stepOutputs, current)
+	repo := resolveField(s.config.Repo, triggerData, stepOutputs, current)
+	workflow := resolveField(s.config.Workflow, triggerData, stepOutputs, current)
+	ref := resolveField(s.config.Ref, triggerData, stepOutputs, current)
+
+	// Resolve template references in each input value.
+	inputs := make(map[string]string, len(s.config.Inputs))
+	for k, v := range s.config.Inputs {
+		inputs[k] = resolveField(v, triggerData, stepOutputs, current)
+	}
+
+	err := s.ghClient.TriggerWorkflow(ctx, owner, repo, workflow, ref, inputs, token)
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to trigger workflow: %v", err)), nil
 	}
@@ -121,10 +125,10 @@ func (s *actionTriggerStep) Execute(
 	return &sdk.StepResult{
 		Output: map[string]any{
 			"triggered": true,
-			"owner":     s.config.Owner,
-			"repo":      s.config.Repo,
-			"workflow":  s.config.Workflow,
-			"ref":       s.config.Ref,
+			"owner":     owner,
+			"repo":      repo,
+			"workflow":  workflow,
+			"ref":       ref,
 		},
 	}, nil
 }
