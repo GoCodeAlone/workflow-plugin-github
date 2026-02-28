@@ -2,7 +2,7 @@ module github.com/GoCodeAlone/workflow-plugin-github
 
 go 1.26
 
-require github.com/GoCodeAlone/workflow v0.3.0
+require github.com/GoCodeAlone/workflow v0.3.1
 
 require (
 	cel.dev/expr v0.25.1 // indirect
