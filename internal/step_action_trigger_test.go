@@ -64,7 +64,7 @@ func TestActionTriggerStep_Success(t *testing.T) {
 		t.Fatalf("newActionTriggerStep: %v", err)
 	}
 
-	result, err := step.Execute(context.Background(), nil, nil, nil, nil)
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -110,7 +110,7 @@ func TestActionTriggerStep_APIError(t *testing.T) {
 		t.Fatalf("newActionTriggerStep: %v", err)
 	}
 
-	result, err := step.Execute(context.Background(), nil, nil, nil, nil)
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute returned unexpected error: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestActionTriggerStep_MissingToken(t *testing.T) {
 		t.Fatalf("newActionTriggerStep: %v", err)
 	}
 
-	result, err := step.Execute(context.Background(), nil, nil, nil, nil)
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -161,7 +161,7 @@ func TestActionTriggerStep_DefaultRef(t *testing.T) {
 		t.Fatalf("newActionTriggerStep: %v", err)
 	}
 
-	_, err = step.Execute(context.Background(), nil, nil, nil, nil)
+	_, err = step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

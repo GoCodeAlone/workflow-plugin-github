@@ -37,7 +37,7 @@ func TestCreateCheckStep_Success(t *testing.T) {
 		t.Fatalf("newCreateCheckStep: %v", err)
 	}
 
-	result, err := step.Execute(context.Background(), nil, nil, nil, nil)
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -88,7 +88,7 @@ func TestCreateCheckStep_InProgress(t *testing.T) {
 		t.Fatalf("newCreateCheckStep: %v", err)
 	}
 
-	result, err := step.Execute(context.Background(), nil, nil, nil, nil)
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestCreateCheckStep_APIError(t *testing.T) {
 		t.Fatalf("newCreateCheckStep: %v", err)
 	}
 
-	result, err := step.Execute(context.Background(), nil, nil, nil, nil)
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute returned unexpected error: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestCreateCheckStep_MissingToken(t *testing.T) {
 		t.Fatalf("newCreateCheckStep: %v", err)
 	}
 
-	result, err := step.Execute(context.Background(), nil, nil, nil, nil)
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestCreateCheckStep_NoOutputWhenTitleAndSummaryEmpty(t *testing.T) {
 		t.Fatalf("newCreateCheckStep: %v", err)
 	}
 
-	_, err = step.Execute(context.Background(), nil, nil, nil, nil)
+	_, err = step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

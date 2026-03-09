@@ -31,7 +31,7 @@ func TestActionStatusStep_SingleFetch(t *testing.T) {
 		t.Fatalf("newActionStatusStep: %v", err)
 	}
 
-	result, err := step.Execute(context.Background(), nil, nil, nil, nil)
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -63,7 +63,7 @@ func TestActionStatusStep_APIError(t *testing.T) {
 		t.Fatalf("newActionStatusStep: %v", err)
 	}
 
-	result, err := step.Execute(context.Background(), nil, nil, nil, nil)
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute returned unexpected error: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestActionStatusStep_MissingToken(t *testing.T) {
 		t.Fatalf("newActionStatusStep: %v", err)
 	}
 
-	result, err := step.Execute(context.Background(), nil, nil, nil, nil)
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestActionStatusStep_WaitUntilComplete(t *testing.T) {
 		t.Fatalf("newActionStatusStep: %v", err)
 	}
 
-	result, err := step.Execute(context.Background(), nil, nil, nil, nil)
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -154,7 +154,7 @@ func TestActionStatusStep_WaitTimeout(t *testing.T) {
 		t.Fatalf("newActionStatusStep: %v", err)
 	}
 
-	result, err := step.Execute(context.Background(), nil, nil, nil, nil)
+	result, err := step.Execute(context.Background(), nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestActionStatusStep_ContextCancelled(t *testing.T) {
 		cancel()
 	}()
 
-	result, err := step.Execute(ctx, nil, nil, nil, nil)
+	result, err := step.Execute(ctx, nil, nil, nil, nil, nil)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

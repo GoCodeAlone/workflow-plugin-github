@@ -135,6 +135,7 @@ func (s *actionStatusStep) Execute(
 	stepOutputs map[string]map[string]any,
 	current map[string]any,
 	_ map[string]any,
+	_ map[string]any,
 ) (*sdk.StepResult, error) {
 	token := s.config.Token
 	if token == "" {
