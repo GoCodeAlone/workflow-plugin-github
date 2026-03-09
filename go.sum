@@ -32,10 +32,10 @@ github.com/GoCodeAlone/modular v1.12.0 h1:C4tLfJe65rrUQsbtndiVfldtT8IRKZcHczNRNb
 github.com/GoCodeAlone/modular v1.12.0/go.mod h1:ET7mlekRjkRq9mwJdWmaC2KDUWvjla2IqKVFrYO2JnY=
 github.com/GoCodeAlone/modular/modules/auth v1.12.0 h1:eO4iq8tkz8W5sLKRSG5dC+ACITMtxZrtSJ+ReE3fKdA=
 github.com/GoCodeAlone/modular/modules/auth v1.12.0/go.mod h1:D+yfkgN3MTkyl1xe8h2UL7uqB9Vj1lO3wUrscfnJ/NU=
-github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.5.0 h1:K6X+X1sOq+lpI1Oa+XUzH+GlSRYJQfDTTcvMjZfkbFU=
-github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.5.0/go.mod h1:Q0TpCFTtd0q20okDyi63ALS+1xmkYU4wNUOqwczyih0=
-github.com/GoCodeAlone/workflow v0.3.29 h1:K8yZG0m3QaiqwRXjkK1w2fnYjxvuDXw0spYdfdCKvcI=
-github.com/GoCodeAlone/workflow v0.3.29/go.mod h1:2DKL4EgBobabGhwvYwUm8l8l/UaZbgLYRw5RyeueDaw=
+github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.5.1 h1:GTSJh+QbPj7nuXoiiz53+DPxJ3xw7JPemzBuWg6vKS4=
+github.com/GoCodeAlone/modular/modules/eventbus/v2 v2.5.1/go.mod h1:PvgkUxMg2RL/TjKevO3PBTy+RazZX5YXi8IK/Bz1qcw=
+github.com/GoCodeAlone/workflow v0.3.30 h1:hRVP6qwWyTh3295IElAjU4Van+959xUprIralI5rD/g=
+github.com/GoCodeAlone/workflow v0.3.30/go.mod h1:NSVUkq7XJewE8/5soOtxLKnxR+MjtLsxY4+OJ9IUXoA=
 github.com/GoCodeAlone/yaegi v0.17.1 h1:aPAwU29L9cGceRAff02c5pjQcT5KapDB4fWFZK9tElE=
 github.com/GoCodeAlone/yaegi v0.17.1/go.mod h1:z5Pr6Wse6QJcQvpgxTxzMAevFarH0N37TG88Y9dprx0=
 github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.30.0 h1:sBEjpZlNHzK1voKq9695PJSX2o5NEXl7/OL3coiIY0c=
