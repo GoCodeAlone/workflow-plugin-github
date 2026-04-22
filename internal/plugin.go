@@ -6,6 +6,10 @@ import (
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
+// Version is set at build time via -ldflags
+// "-X github.com/GoCodeAlone/workflow-plugin-github/internal.Version=X.Y.Z"
+var Version = "dev"
+
 // webhookRouteConfig is the config fragment YAML that declares the GitHub
 // webhook HTTP route so the engine's HTTP server registers it via the normal
 // config pipeline instead of the unreachable global DefaultServeMux.
@@ -32,7 +36,7 @@ func NewGitHubPlugin() sdk.PluginProvider {
 func (p *githubPlugin) Manifest() sdk.PluginManifest {
 	return sdk.PluginManifest{
 		Name:        "workflow-plugin-github",
-		Version:     "1.0.1",
+		Version:     Version,
 		Author:      "GoCodeAlone",
 		Description: "GitHub integration plugin: webhook handling, GitHub Actions, PRs, issues, releases, and deployments",
 	}
