@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"testing"
+
+	"github.com/GoCodeAlone/workflow/plugin"
 )
 
 // TestModuleSchemas verifies that the plugin's SchemaProvider returns schema
@@ -77,7 +79,7 @@ func TestPluginStepSchemasJSON(t *testing.T) {
 	// Locate plugin.json relative to the repository root (one level up from internal/).
 	data, err := os.ReadFile("../plugin.json")
 	if err != nil {
-		t.Skipf("plugin.json not found (skipping in isolated test environments): %v", err)
+		t.Fatalf("plugin.json not found — every build must ship a contract manifest: %v", err)
 	}
 
 	var manifest struct {
@@ -108,5 +110,37 @@ func TestPluginStepSchemasJSON(t *testing.T) {
 	if len(manifest.StepSchemas) != len(manifest.StepTypes) {
 		t.Errorf("plugin.json: stepSchemas count (%d) does not match stepTypes count (%d)",
 			len(manifest.StepSchemas), len(manifest.StepTypes))
+	}
+}
+
+// TestPluginManifestEngineValidation verifies that plugin.json is parseable as a
+// workflow engine PluginManifest and that Validate() passes required-field checks.
+func TestPluginManifestEngineValidation(t *testing.T) {
+	m, err := plugin.LoadManifest("../plugin.json")
+	if err != nil {
+		t.Fatalf("plugin.LoadManifest: %v", err)
+	}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("plugin.json fails engine manifest validation: %v", err)
+	}
+	// Strict contract requirements: must declare at least one module or step type.
+	if len(m.ModuleTypes) == 0 && len(m.StepTypes) == 0 {
+		t.Error("plugin.json: must advertise at least one moduleType or stepType for strict contracts")
+	}
+	// StepSchemas must be present when step types are declared.
+	if len(m.StepTypes) > 0 && len(m.StepSchemas) == 0 {
+		t.Error("plugin.json: stepSchemas is required when stepTypes are declared (missing_step_contract_descriptor)")
+	}
+	// Every step type must have a schema entry.
+	schemaSet := make(map[string]bool, len(m.StepSchemas))
+	for _, s := range m.StepSchemas {
+		if s != nil {
+			schemaSet[s.Type] = true
+		}
+	}
+	for _, st := range m.StepTypes {
+		if !schemaSet[st] {
+			t.Errorf("plugin.json: stepType %q has no stepSchema (missing_step_contract_descriptor)", st)
+		}
 	}
 }

@@ -14,3 +14,35 @@ jobs:
           go-version-file: go.mod
       - run: go build ./...
       - run: go test ./... -v -race -count=1
+        env:
+          GOPRIVATE: github.com/GoCodeAlone/*
+          GONOSUMCHECK: github.com/GoCodeAlone/*
+
+  strict-contracts:
+    name: Validate strict plugin contracts
+    runs-on: [self-hosted, Linux, X64]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify plugin.json exists
+        run: |
+          test -f plugin.json || { echo "ERROR: plugin.json is missing — every release must include a strict contract manifest"; exit 1; }
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Run strict contract tests
+        run: |
+          go test ./internal/... -run "TestPluginStepSchemasJSON|TestPluginManifestEngineValidation|TestModuleSchemas" -v -count=1
+        env:
+          GOPRIVATE: github.com/GoCodeAlone/*
+          GONOSUMCHECK: github.com/GoCodeAlone/*
+      - name: Validate plugin.json with wfctl
+        run: |
+          # wfctl validates registry-format manifests; strict contract schema coverage is enforced
+          # by the Go tests above. This step runs informational validation and logs the result.
+          go run github.com/GoCodeAlone/workflow/cmd/wfctl@v0.3.56 plugin validate --file plugin.json 2>&1; wfctl_exit=$?
+          echo "wfctl validation exit code: ${wfctl_exit}"
+        env:
+          GOPRIVATE: github.com/GoCodeAlone/*
+          GONOSUMCHECK: github.com/GoCodeAlone/*
