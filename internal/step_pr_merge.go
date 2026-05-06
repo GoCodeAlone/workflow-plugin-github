@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/google/go-github/v69/github"
+
 	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 )
 
@@ -81,8 +83,9 @@ func (s *prMergeStep) Execute(
 	commitTitle := resolveField(s.config.CommitTitle, triggerData, stepOutputs, current)
 
 	client := NewSDKClient(token)
+	method := resolveField(s.config.Method, triggerData, stepOutputs, current)
 	result, _, err := client.GH.PullRequests.Merge(ctx, owner, repo, s.config.PRNumber,
-		commitTitle, nil)
+		commitTitle, &github.PullRequestOptions{MergeMethod: method})
 	if err != nil {
 		return errorResult(fmt.Sprintf("merge PR: %v", err)), nil
 	}

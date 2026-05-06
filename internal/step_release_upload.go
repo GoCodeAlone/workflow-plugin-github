@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 
 	"github.com/google/go-github/v69/github"
 
@@ -27,12 +29,13 @@ type releaseUploadStep struct {
 }
 
 type releaseUploadConfig struct {
-	Owner     string `yaml:"owner"`
-	Repo      string `yaml:"repo"`
-	ReleaseID int64  `yaml:"release_id"`
-	File      string `yaml:"file"`
-	Name      string `yaml:"name"`
-	Token     string `yaml:"token"`
+	Owner        string `yaml:"owner"`
+	Repo         string `yaml:"repo"`
+	ReleaseID    int64  `yaml:"release_id"`
+	ReleaseIDRaw string `yaml:"-"` // raw string for dynamic {{.field}} resolution
+	File         string `yaml:"file"`
+	Name         string `yaml:"name"`
+	Token        string `yaml:"token"`
 }
 
 func newReleaseUploadStep(name string, raw map[string]any) (*releaseUploadStep, error) {
@@ -52,8 +55,20 @@ func newReleaseUploadStep(name string, raw map[string]any) (*releaseUploadStep, 
 		cfg.ReleaseID = v
 	case float64:
 		cfg.ReleaseID = int64(v)
+	case string:
+		if v != "" {
+			if strings.Contains(v, "{{") && strings.Contains(v, "}}") {
+				cfg.ReleaseIDRaw = v
+			} else {
+				n, err := strconv.ParseInt(v, 10, 64)
+				if err != nil {
+					return nil, fmt.Errorf("step.gh_release_upload %q: config.release_id is not a valid integer: %w", name, err)
+				}
+				cfg.ReleaseID = n
+			}
+		}
 	}
-	if cfg.ReleaseID == 0 {
+	if cfg.ReleaseID == 0 && cfg.ReleaseIDRaw == "" {
 		return nil, fmt.Errorf("step.gh_release_upload %q: config.release_id is required", name)
 	}
 	cfg.File, _ = raw["file"].(string)
@@ -86,6 +101,20 @@ func (s *releaseUploadStep) Execute(
 		assetName = filePath
 	}
 
+	// Resolve release_id — may be a static int or a dynamic template reference.
+	releaseID := s.config.ReleaseID
+	if s.config.ReleaseIDRaw != "" {
+		resolved := resolveField(s.config.ReleaseIDRaw, triggerData, stepOutputs, current)
+		n, err := strconv.ParseInt(resolved, 10, 64)
+		if err != nil {
+			return errorResult(fmt.Sprintf("release_id resolved to non-integer value %q: %v", resolved, err)), nil
+		}
+		releaseID = n
+	}
+	if releaseID == 0 {
+		return errorResult("release_id resolved to zero — check pipeline context"), nil
+	}
+
 	f, err := os.Open(filePath) //nolint:gosec // G304: path from step config, trusted
 	if err != nil {
 		return errorResult(fmt.Sprintf("open file %q: %v", filePath, err)), nil
@@ -98,7 +127,7 @@ func (s *releaseUploadStep) Execute(
 	}
 
 	client := NewSDKClient(token)
-	asset, _, err := client.GH.Repositories.UploadReleaseAsset(ctx, owner, repo, s.config.ReleaseID,
+	asset, _, err := client.GH.Repositories.UploadReleaseAsset(ctx, owner, repo, releaseID,
 		&github.UploadOptions{Name: assetName},
 		f)
 	if err != nil {
