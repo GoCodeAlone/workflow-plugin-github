@@ -17,6 +17,13 @@ func (p *githubPlugin) ModuleSchemas() []sdk.ModuleSchemaData {
 			Description: "Receives GitHub webhook events via HTTP, verifies HMAC-SHA256 signatures, and publishes normalised GitEvent messages to a configurable topic.",
 			ConfigFields: []sdk.ConfigField{
 				{
+					Name:         "provider",
+					Type:         "string",
+					Description:  "Webhook provider identifier. Accepted for backward compatibility; the module always publishes events with provider 'github'.",
+					DefaultValue: "github",
+					Required:     false,
+				},
+				{
 					Name:        "secret",
 					Type:        "string",
 					Description: "Webhook secret used to verify the X-Hub-Signature-256 header. Leave empty to skip signature verification.",

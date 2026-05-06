@@ -65,7 +65,7 @@ func TestModuleSchemas(t *testing.T) {
 	for _, f := range webhook.ConfigFields {
 		webhookFieldNames[f.Name] = true
 	}
-	for _, want := range []string{"secret", "events", "topic"} {
+	for _, want := range []string{"provider", "secret", "events", "topic"} {
 		if !webhookFieldNames[want] {
 			t.Errorf("git.webhook schema: required config field %q is missing", want)
 		}
@@ -203,6 +203,122 @@ func TestPluginStepSchemasJSON(t *testing.T) {
 	if len(sortedRuntime) != len(sortedJSON) {
 		t.Errorf("runtime StepTypes() count (%d) != plugin.json stepTypes count (%d)",
 			len(sortedRuntime), len(sortedJSON))
+	}
+}
+
+// TestStepSchemaFieldContracts verifies critical field-level properties across
+// step schemas in plugin.json: token required/sensitive, template-capable fields
+// typed as string, and key required flags.
+func TestStepSchemaFieldContracts(t *testing.T) {
+	data, err := os.ReadFile("../plugin.json")
+	if err != nil {
+		t.Fatalf("plugin.json not found: %v", err)
+	}
+
+	type configField struct {
+		Key         string `json:"key"`
+		Type        string `json:"type"`
+		Required    bool   `json:"required"`
+		Sensitive   bool   `json:"sensitive"`
+		DefaultValue any   `json:"defaultValue"`
+	}
+	type stepSchema struct {
+		Type         string        `json:"type"`
+		ConfigFields []configField `json:"configFields"`
+	}
+	var manifest struct {
+		StepSchemas []stepSchema `json:"stepSchemas"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("parse plugin.json: %v", err)
+	}
+
+	// Index schemas by type for easy lookup.
+	byType := make(map[string]stepSchema, len(manifest.StepSchemas))
+	for _, s := range manifest.StepSchemas {
+		byType[s.Type] = s
+	}
+	fieldsByKey := func(s stepSchema) map[string]configField {
+		m := make(map[string]configField, len(s.ConfigFields))
+		for _, f := range s.ConfigFields {
+			m[f.Key] = f
+		}
+		return m
+	}
+
+	// Every step schema with a token field must mark it required and sensitive.
+	for _, s := range manifest.StepSchemas {
+		fields := fieldsByKey(s)
+		if tok, ok := fields["token"]; ok {
+			if !tok.Required {
+				t.Errorf("%s: token field must be required=true (step fails at runtime without it)", s.Type)
+			}
+			if !tok.Sensitive {
+				t.Errorf("%s: token field must be sensitive=true", s.Type)
+			}
+		}
+	}
+
+	// Fields that accept both numeric literals and template expressions must be
+	// declared as string so schema-aware validators accept template syntax.
+	templateCapableFields := map[string]string{
+		"step.gh_action_status":  "run_id",
+		"step.gh_release_upload": "release_id",
+	}
+	for stepType, fieldKey := range templateCapableFields {
+		s, ok := byType[stepType]
+		if !ok {
+			t.Errorf("%s: schema not found", stepType)
+			continue
+		}
+		fields := fieldsByKey(s)
+		f, ok := fields[fieldKey]
+		if !ok {
+			t.Errorf("%s: field %q not found in schema", stepType, fieldKey)
+			continue
+		}
+		if f.Type != "string" {
+			t.Errorf("%s: field %q type should be %q (supports template expressions), got %q",
+				stepType, fieldKey, "string", f.Type)
+		}
+		if !f.Required {
+			t.Errorf("%s: field %q should be required=true", stepType, fieldKey)
+		}
+	}
+
+	// Dynamic string fields that also accept template expressions must not be
+	// declared as select (which would prevent template expressions).
+	noSelectFields := map[string]string{
+		"step.gh_pr_merge":  "method",
+		"step.gh_pr_review": "event",
+	}
+	for stepType, fieldKey := range noSelectFields {
+		s, ok := byType[stepType]
+		if !ok {
+			t.Errorf("%s: schema not found", stepType)
+			continue
+		}
+		fields := fieldsByKey(s)
+		f, ok := fields[fieldKey]
+		if !ok {
+			t.Errorf("%s: field %q not found in schema", stepType, fieldKey)
+			continue
+		}
+		if f.Type == "select" {
+			t.Errorf("%s: field %q should not be type 'select' — resolveField supports templates so the type must be 'string'", stepType, fieldKey)
+		}
+	}
+
+	// gh_secret_set: repo must be required (no org-secret path exists).
+	if s, ok := byType["step.gh_secret_set"]; ok {
+		fields := fieldsByKey(s)
+		if repo, ok := fields["repo"]; ok {
+			if !repo.Required {
+				t.Errorf("step.gh_secret_set: repo field must be required=true (only repo secrets are supported)")
+			}
+		} else {
+			t.Errorf("step.gh_secret_set: repo field missing from schema")
+		}
 	}
 }
 

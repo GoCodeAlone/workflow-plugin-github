@@ -41,7 +41,10 @@ jobs:
         run: |
           # wfctl validates registry-format manifests; strict contract schema coverage is enforced
           # by the Go tests above. This step runs informational validation and logs the result.
-          go run github.com/GoCodeAlone/workflow/cmd/wfctl@v0.3.56 plugin validate --file plugin.json 2>&1; wfctl_exit=$?
+          set +e
+          go run github.com/GoCodeAlone/workflow/cmd/wfctl@v0.3.56 plugin validate --file plugin.json 2>&1
+          wfctl_exit=$?
+          set -e
           echo "wfctl validation exit code: ${wfctl_exit}"
         env:
           GOPRIVATE: github.com/GoCodeAlone/*

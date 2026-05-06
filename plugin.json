@@ -58,7 +58,7 @@
             "configFields": [
                 {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
                 {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "run_id", "type": "number", "description": "Workflow run ID (integer or template expression e.g. {{.steps.trigger.run_id}})", "required": true},
+                {"key": "run_id", "type": "string", "description": "Workflow run ID (numeric literal or template expression e.g. {{.steps.trigger_step.run_id}})", "required": true},
                 {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true},
                 {"key": "wait", "type": "boolean", "description": "Poll until the run reaches a terminal state", "defaultValue": false},
                 {"key": "poll_interval", "type": "duration", "description": "Interval between status polls when wait=true", "defaultValue": "10s"},
@@ -74,7 +74,7 @@
         {
             "type": "step.gh_create_check",
             "plugin": "workflow-plugin-github",
-            "description": "Creates or updates a GitHub Check Run (status check) on a specific commit.",
+            "description": "Creates a GitHub Check Run (status check) on a specific commit.",
             "configFields": [
                 {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
                 {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
@@ -122,7 +122,7 @@
                 {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
                 {"key": "pr_number", "type": "number", "description": "Pull request number to merge", "required": true},
                 {"key": "commit_title", "type": "string", "description": "Merge commit title"},
-                {"key": "method", "type": "select", "description": "Merge method", "options": ["merge", "squash", "rebase"], "defaultValue": "merge"},
+                {"key": "method", "type": "string", "description": "Merge method: merge, squash, or rebase (also accepts template expressions)", "defaultValue": "merge"},
                 {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
             ],
             "outputs": [
@@ -155,7 +155,7 @@
                 {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
                 {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
                 {"key": "pr_number", "type": "number", "description": "Pull request number", "required": true},
-                {"key": "event", "type": "select", "description": "Review event type", "options": ["APPROVE", "REQUEST_CHANGES", "COMMENT"], "defaultValue": "COMMENT"},
+                {"key": "event", "type": "string", "description": "Review event type: APPROVE, REQUEST_CHANGES, or COMMENT (also accepts template expressions)", "defaultValue": "COMMENT"},
                 {"key": "body", "type": "string", "description": "Review body text"},
                 {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
             ],
@@ -249,7 +249,7 @@
             "configFields": [
                 {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
                 {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "release_id", "type": "number", "description": "Release ID (integer or template expression e.g. {{.steps.create_release.release_id}})", "required": true},
+                {"key": "release_id", "type": "string", "description": "Release ID (numeric literal or template expression e.g. {{.steps.create_release.release_id}})", "required": true},
                 {"key": "file", "type": "filepath", "description": "Local path to the file to upload", "required": true},
                 {"key": "name", "type": "string", "description": "Display name for the release asset"},
                 {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
