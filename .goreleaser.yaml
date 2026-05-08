@@ -36,6 +36,7 @@ checksum:
   name_template: "checksums.txt"
 
 release:
+  draft: true
   github:
     owner: GoCodeAlone
     name: workflow-plugin-github
