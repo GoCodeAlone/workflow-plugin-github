@@ -17,8 +17,8 @@ func TestModuleSchemas(t *testing.T) {
 	schemas := p.ModuleSchemas()
 	runtimeTypes := p.ModuleTypes()
 
-	if len(schemas) != 2 {
-		t.Fatalf("expected 2 module schemas, got %d", len(schemas))
+	if len(schemas) != 3 {
+		t.Fatalf("expected 3 module schemas, got %d", len(schemas))
 	}
 
 	// Every schema type must appear in the runtime ModuleTypes() list.
@@ -43,7 +43,7 @@ func TestModuleSchemas(t *testing.T) {
 		}
 	}
 
-	for _, wantType := range []string{"git.webhook", "github.app"} {
+	for _, wantType := range []string{"git.webhook", "github.app", "github.runner_provider"} {
 		if _, ok := schemaSet[wantType]; !ok {
 			t.Errorf("missing module schema for type %q", wantType)
 		}
@@ -216,11 +216,11 @@ func TestStepSchemaFieldContracts(t *testing.T) {
 	}
 
 	type configField struct {
-		Key         string `json:"key"`
-		Type        string `json:"type"`
-		Required    bool   `json:"required"`
-		Sensitive   bool   `json:"sensitive"`
-		DefaultValue any   `json:"defaultValue"`
+		Key          string `json:"key"`
+		Type         string `json:"type"`
+		Required     bool   `json:"required"`
+		Sensitive    bool   `json:"sensitive"`
+		DefaultValue any    `json:"defaultValue"`
 	}
 	type stepSchema struct {
 		Type         string        `json:"type"`

@@ -47,6 +47,7 @@ func (p *githubPlugin) ModuleTypes() []string {
 	return []string{
 		"git.webhook",
 		"github.app",
+		"github.runner_provider",
 	}
 }
 
@@ -57,6 +58,8 @@ func (p *githubPlugin) CreateModule(typeName, name string, config map[string]any
 		return newWebhookModule(name, config)
 	case "github.app":
 		return newGitHubAppModule(name, config)
+	case "github.runner_provider":
+		return newGitHubRunnerProviderModule(name, config, nil)
 	default:
 		return nil, fmt.Errorf("github plugin: unknown module type %q", typeName)
 	}

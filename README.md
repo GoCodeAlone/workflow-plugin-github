@@ -21,6 +21,36 @@ modules:
 
 The module registers an HTTP handler at `/webhooks/github`. Configure your GitHub repository webhook to point to `https://<host>/webhooks/github`.
 
+### Module: `github.runner_provider`
+
+Provides the GitHub-owned side of the workflow-compute runner provider boundary.
+It mints repository-scoped GitHub Actions runner registration tokens and removes
+runners without exposing GitHub API credentials to workflow-compute.
+
+```yaml
+modules:
+  - name: github-runners
+    type: github.runner_provider
+    config:
+      token: "${GITHUB_TOKEN}"
+      provider_token: "${GITHUB_RUNNER_PROVIDER_TOKEN}"
+      repositories: ["GoCodeAlone/workflow-compute"]
+```
+
+For local proof runs, the repo also builds `github-runner-provider`, a small
+HTTP provider service:
+
+```sh
+GITHUB_TOKEN=... \
+GITHUB_RUNNER_PROVIDER_TOKEN=... \
+GITHUB_RUNNER_PROVIDER_REPOSITORIES=GoCodeAlone/workflow-compute \
+  bin/github-runner-provider 127.0.0.1:8090
+```
+
+workflow-compute should point at that service with
+`COMPUTE_GITHUB_RUNNER_PROVIDER_URL` and
+`COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN`; it should not receive `GITHUB_TOKEN`.
+
 ### Step: `step.gh_action_trigger`
 
 Triggers a GitHub Actions workflow via `workflow_dispatch`.

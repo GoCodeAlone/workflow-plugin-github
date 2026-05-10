@@ -10,7 +10,7 @@
     "keywords": ["github", "webhook", "git", "actions", "ci", "cd", "integration", "pull-request", "release"],
     "homepage": "https://github.com/GoCodeAlone/workflow-plugin-github",
     "repository": "https://github.com/GoCodeAlone/workflow-plugin-github",
-    "moduleTypes": ["git.webhook", "github.app"],
+    "moduleTypes": ["git.webhook", "github.app", "github.runner_provider"],
     "stepTypes": [
         "step.gh_action_trigger",
         "step.gh_action_status",

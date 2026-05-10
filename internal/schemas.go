@@ -82,5 +82,41 @@ func (p *githubPlugin) ModuleSchemas() []sdk.ModuleSchemaData {
 				},
 			},
 		},
+		{
+			Type:        "github.runner_provider",
+			Label:       "GitHub Runner Provider",
+			Category:    "github",
+			Description: "Mints and removes repository-scoped GitHub Actions self-hosted runners for workflow-compute through an authenticated provider boundary.",
+			ConfigFields: []sdk.ConfigField{
+				{
+					Name:        "token",
+					Type:        "string",
+					Description: "GitHub API token with self-hosted runner administration permissions.",
+					Required:    true,
+				},
+				{
+					Name:        "provider_token",
+					Type:        "string",
+					Description: "Bearer token expected from workflow-compute when invoking provider methods.",
+					Required:    true,
+				},
+				{
+					Name:        "repositories",
+					Type:        "array",
+					Description: "Allowed repositories in owner/name form.",
+					Required:    true,
+				},
+				{
+					Name:        "api_base_url",
+					Type:        "string",
+					Description: "Optional GitHub API base URL for Enterprise or tests.",
+					Required:    false,
+				},
+			},
+			Inputs: []sdk.ServiceIO{
+				{Name: "registration_token", Type: "method", Description: "Returns a short-lived GitHub runner registration token for an allowlisted repository."},
+				{Name: "remove_runner", Type: "method", Description: "Removes a GitHub Actions self-hosted runner from an allowlisted repository."},
+			},
+		},
 	}
 }
