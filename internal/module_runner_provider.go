@@ -220,9 +220,14 @@ func (m *githubRunnerProviderModule) invokeMethod(ctx context.Context, method st
 
 func (m *githubRunnerProviderModule) HTTPHandler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("GET /healthz", m.handleHealth)
 	mux.HandleFunc("POST /v1/actions/runners/registration-token", m.handleRegistrationToken)
 	mux.HandleFunc("DELETE /v1/actions/runners/{runner_id}", m.handleRemoveRunner)
 	return mux
+}
+
+func (m *githubRunnerProviderModule) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	writeProviderResponse(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 func (m *githubRunnerProviderModule) handleRegistrationToken(w http.ResponseWriter, r *http.Request) {

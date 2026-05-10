@@ -145,6 +145,35 @@ func TestT41_GitHubRunnerProviderModuleServesComputeProviderHTTP(t *testing.T) {
 	}
 }
 
+func TestT44_GitHubRunnerProviderServesHealthz(t *testing.T) {
+	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
+		"token":          "github-token",
+		"provider_token": "provider-token",
+		"repositories":   []any{"GoCodeAlone/workflow-compute"},
+	}, &fakeRunnerClient{})
+	if err != nil {
+		t.Fatalf("module: %v", err)
+	}
+	server := httptest.NewServer(module.HTTPHandler())
+	defer server.Close()
+
+	resp, err := server.Client().Get(server.URL + "/healthz")
+	if err != nil {
+		t.Fatalf("health request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status: got %d want 200", resp.StatusCode)
+	}
+	var got map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got["status"] != "ok" {
+		t.Fatalf("health response: got %+v", got)
+	}
+}
+
 func TestT41_GitHubRunnerProviderHTTPRejectsUnallowlistedRepository(t *testing.T) {
 	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
 		"token":          "github-token",
