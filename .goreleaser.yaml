@@ -23,11 +23,25 @@ builds:
       - arm64
     ldflags:
       - -s -w -X github.com/GoCodeAlone/workflow-plugin-github/internal.Version={{.Version}}
+  - id: github-runner-provider
+    main: ./cmd/github-runner-provider
+    binary: github-runner-provider
+    env:
+      - CGO_ENABLED=0
+      - GOPRIVATE=github.com/GoCodeAlone/*
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
 
 archives:
   - id: workflow-plugin-github
-    builds:
+    ids:
       - workflow-plugin-github
+      - github-runner-provider
     name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
     files:
       - plugin.json
