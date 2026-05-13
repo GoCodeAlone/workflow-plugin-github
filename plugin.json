@@ -14,6 +14,7 @@
     "stepTypes": [
         "step.gh_action_trigger",
         "step.gh_action_status",
+        "step.gh_compute_gateway",
         "step.gh_create_check",
         "step.gh_pr_create",
         "step.gh_pr_merge",
@@ -69,6 +70,54 @@
                 {"key": "status", "type": "string", "description": "Run status (e.g. queued, in_progress, completed)"},
                 {"key": "conclusion", "type": "string", "description": "Run conclusion (e.g. success, failure, cancelled)"},
                 {"key": "url", "type": "string", "description": "URL to the workflow run"}
+            ]
+        },
+        {
+            "type": "step.gh_compute_gateway",
+            "plugin": "workflow-plugin-github",
+            "description": "Submits a GitHub-origin workload to workflow-compute's protected GitHub gateway and waits for proof-backed completion.",
+            "configFields": [
+                {"key": "server_url", "type": "string", "description": "workflow-compute control plane URL", "required": true},
+                {"key": "token", "type": "string", "description": "workflow-compute credential with github gateway scopes", "required": true, "sensitive": true},
+                {"key": "repository", "type": "string", "description": "GitHub repository in owner/name form", "required": true},
+                {"key": "oidc_token", "type": "string", "description": "GitHub Actions OIDC token proving workflow job provenance", "required": true, "sensitive": true},
+                {"key": "workflow_run_id", "type": "string", "description": "Workflow run ID (numeric literal or template expression)", "required": true},
+                {"key": "workflow_run_attempt", "type": "string", "description": "Workflow run attempt (numeric literal or template expression)"},
+                {"key": "workflow_job_id", "type": "string", "description": "Workflow job ID (numeric literal or template expression)", "required": true},
+                {"key": "workflow_job_name", "type": "string", "description": "Workflow job name", "required": true},
+                {"key": "ref", "type": "string", "description": "Git ref associated with the workload"},
+                {"key": "sha", "type": "string", "description": "Commit SHA associated with the workload"},
+                {"key": "org_id", "type": "string", "description": "workflow-compute organization ID", "required": true},
+                {"key": "pool_id", "type": "string", "description": "workflow-compute pool ID", "required": true},
+                {"key": "policy_id", "type": "string", "description": "workflow-compute policy ID", "required": true},
+                {"key": "command_args", "type": "array", "description": "Command argv to execute inside the protected compute provider", "required": true},
+                {"key": "working_directory", "type": "string", "description": "Optional working directory for command workloads"},
+                {"key": "artifact_allowlist", "type": "array", "description": "Output artifact paths the agent may return"},
+                {"key": "labels", "type": "map", "description": "Additional non-github workload labels"},
+                {"key": "executor_provider", "type": "string", "description": "Optional executor provider selector"},
+                {"key": "execution_security_tier", "type": "string", "description": "Protected execution tier", "defaultValue": "sandboxed-container"},
+                {"key": "proof_tier", "type": "string", "description": "Proof tier required for success", "defaultValue": "artifact-hash"},
+                {"key": "hardware_class", "type": "string", "description": "Optional hardware security class selector"},
+                {"key": "wait", "type": "boolean", "description": "Poll workflow-compute until proof-backed completion; must be true for this provider", "required": true, "defaultValue": true},
+                {"key": "poll_interval", "type": "duration", "description": "Interval between status polls when wait=true", "defaultValue": "10s"},
+                {"key": "timeout", "type": "duration", "description": "Maximum time to wait when wait=true", "defaultValue": "30m"},
+                {"key": "write_check", "type": "boolean", "description": "Create a GitHub Check Run when the compute workload reaches a terminal status", "defaultValue": false},
+                {"key": "check_owner", "type": "string", "description": "Owner for the GitHub Check Run target"},
+                {"key": "check_repo", "type": "string", "description": "Repository for the GitHub Check Run target"},
+                {"key": "check_sha", "type": "string", "description": "Commit SHA for the GitHub Check Run target"},
+                {"key": "check_name", "type": "string", "description": "GitHub Check Run name"},
+                {"key": "check_token", "type": "string", "description": "GitHub token for creating the Check Run", "sensitive": true}
+            ],
+            "outputs": [
+                {"key": "task_id", "type": "string", "description": "workflow-compute task ID"},
+                {"key": "status", "type": "string", "description": "workflow-compute task status"},
+                {"key": "conclusion", "type": "string", "description": "Proof-backed conclusion"},
+                {"key": "proof_id", "type": "string", "description": "Accepted proof receipt ID"},
+                {"key": "artifact_hash", "type": "string", "description": "Returned artifact hash"},
+                {"key": "contribution_id", "type": "string", "description": "Contribution ledger event ID"},
+                {"key": "worker_id", "type": "string", "description": "Worker that completed the accepted proof"},
+                {"key": "check_run_id", "type": "number", "description": "GitHub Check Run ID when write_check=true"},
+                {"key": "check_url", "type": "string", "description": "GitHub Check Run URL when write_check=true"}
             ]
         },
         {
