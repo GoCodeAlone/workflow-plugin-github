@@ -6,7 +6,7 @@
     "license": "MIT",
     "type": "external",
     "tier": "community",
-    "minEngineVersion": "0.2.0",
+    "minEngineVersion": "0.51.7",
     "keywords": ["github", "webhook", "git", "actions", "ci", "cd", "integration", "pull-request", "release"],
     "homepage": "https://github.com/GoCodeAlone/workflow-plugin-github",
     "repository": "https://github.com/GoCodeAlone/workflow-plugin-github",
