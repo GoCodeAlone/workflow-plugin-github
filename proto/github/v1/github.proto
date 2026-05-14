@@ -1,0 +1,462 @@
+syntax = "proto3";
+package workflow.plugin.github.v1;
+
+import "google/protobuf/struct.proto";
+
+option go_package = "github.com/GoCodeAlone/workflow-plugin-github/gen;githubv1";
+
+// WebhookModuleConfig is the typed config for the git.webhook module type.
+// Registers an HTTP handler that validates GitHub webhook signatures and
+// publishes normalized GitEvent messages to a host EventBus topic.
+message WebhookModuleConfig {
+  // provider identifies the git provider. Default: "github".
+  string provider = 1;
+  // secret is the HMAC-SHA256 shared secret used to validate webhook payloads.
+  string secret = 2;
+  // events is the list of GitHub event types to forward (empty = all events).
+  repeated string events = 3;
+  // topic is the EventBus topic to publish normalized events to. Default: "git.events".
+  string topic = 4;
+}
+
+// GitHubAppModuleConfig is the typed config for the github.app module type.
+// Manages GitHub App authentication; generates installation access tokens from
+// an App private key and installation ID.
+message GitHubAppModuleConfig {
+  // app_id is the numeric GitHub App ID.
+  int64 app_id = 1;
+  // installation_id is the installation ID for the target org or user account.
+  int64 installation_id = 2;
+  // private_key is the PEM-encoded RSA private key for the GitHub App.
+  string private_key = 3;
+}
+
+// RunnerProviderModuleConfig is the typed config for the github.runner_provider module type.
+// Exposes an HTTP API for provisioning ephemeral GitHub Actions self-hosted runner tokens.
+message RunnerProviderModuleConfig {
+  // token is the GitHub personal access token with actions:write scope.
+  string token = 1;
+  // provider_token is the shared secret that callers must present to the provider API.
+  string provider_token = 2;
+  // api_base_url is the GitHub API base URL. Default: "https://api.github.com".
+  string api_base_url = 3;
+  // repositories is the allowlist of "owner/repo" strings the provider will serve tokens for.
+  repeated string repositories = 4;
+}
+
+// ActionTriggerConfig is the typed config for step.gh_action_trigger.
+message ActionTriggerConfig {
+  string owner = 1;
+  string repo = 2;
+  string workflow = 3;
+  string ref = 4;
+  google.protobuf.Struct inputs = 5;
+  string token = 6;
+}
+
+// ActionTriggerInput carries runtime inputs for step.gh_action_trigger.
+message ActionTriggerInput {
+  google.protobuf.Struct data = 1;
+}
+
+// ActionTriggerOutput holds the result of step.gh_action_trigger.
+message ActionTriggerOutput {
+  bool triggered = 1;
+  string owner = 2;
+  string repo = 3;
+  string workflow = 4;
+  string ref = 5;
+}
+
+// ActionStatusConfig is the typed config for step.gh_action_status.
+message ActionStatusConfig {
+  string owner = 1;
+  string repo = 2;
+  string run_id = 3;
+  string token = 4;
+  bool wait = 5;
+  string poll_interval = 6;
+  string timeout = 7;
+}
+
+// ActionStatusInput carries runtime inputs for step.gh_action_status.
+message ActionStatusInput {
+  google.protobuf.Struct data = 1;
+}
+
+// ActionStatusOutput holds the result of step.gh_action_status.
+message ActionStatusOutput {
+  int64 run_id = 1;
+  string status = 2;
+  string conclusion = 3;
+  string url = 4;
+}
+
+// ComputeGatewayConfig is the typed config for step.gh_compute_gateway.
+message ComputeGatewayConfig {
+  string server_url = 1;
+  string token = 2;
+  string repository = 3;
+  string oidc_token = 4;
+  string workflow_run_id = 5;
+  string workflow_run_attempt = 6;
+  string workflow_job_id = 7;
+  string workflow_job_name = 8;
+  string ref = 9;
+  string sha = 10;
+  string org_id = 11;
+  string pool_id = 12;
+  string policy_id = 13;
+  repeated string command_args = 14;
+  string working_directory = 15;
+  repeated string artifact_allowlist = 16;
+  google.protobuf.Struct labels = 17;
+  string executor_provider = 18;
+  string execution_security_tier = 19;
+  string proof_tier = 20;
+  string hardware_class = 21;
+  bool wait = 22;
+  string poll_interval = 23;
+  string timeout = 24;
+  bool write_check = 25;
+  string check_owner = 26;
+  string check_repo = 27;
+  string check_sha = 28;
+  string check_name = 29;
+  string check_token = 30;
+}
+
+// ComputeGatewayInput carries runtime inputs for step.gh_compute_gateway.
+message ComputeGatewayInput {
+  google.protobuf.Struct data = 1;
+}
+
+// ComputeGatewayOutput holds the result of step.gh_compute_gateway.
+message ComputeGatewayOutput {
+  string task_id = 1;
+  string status = 2;
+  string conclusion = 3;
+  string proof_id = 4;
+  string artifact_hash = 5;
+  string contribution_id = 6;
+  string worker_id = 7;
+  int64 check_run_id = 8;
+  string check_url = 9;
+}
+
+// CreateCheckConfig is the typed config for step.gh_create_check.
+message CreateCheckConfig {
+  string owner = 1;
+  string repo = 2;
+  string sha = 3;
+  string name = 4;
+  string status = 5;
+  string conclusion = 6;
+  string title = 7;
+  string summary = 8;
+  string token = 9;
+}
+
+// CreateCheckInput carries runtime inputs for step.gh_create_check.
+message CreateCheckInput {
+  google.protobuf.Struct data = 1;
+}
+
+// CreateCheckOutput holds the result of step.gh_create_check.
+message CreateCheckOutput {
+  int64 check_run_id = 1;
+  string status = 2;
+  string url = 3;
+}
+
+// PRCreateConfig is the typed config for step.gh_pr_create.
+message PRCreateConfig {
+  string owner = 1;
+  string repo = 2;
+  string head = 3;
+  string base = 4;
+  string title = 5;
+  string body = 6;
+  bool draft = 7;
+  string token = 8;
+}
+
+// PRCreateInput carries runtime inputs for step.gh_pr_create.
+message PRCreateInput {
+  google.protobuf.Struct data = 1;
+}
+
+// PRCreateOutput holds the result of step.gh_pr_create.
+message PRCreateOutput {
+  int64 number = 1;
+  string url = 2;
+  int64 id = 3;
+  string state = 4;
+}
+
+// PRMergeConfig is the typed config for step.gh_pr_merge.
+message PRMergeConfig {
+  string owner = 1;
+  string repo = 2;
+  int64 pr_number = 3;
+  string commit_title = 4;
+  string method = 5;
+  string token = 6;
+}
+
+// PRMergeInput carries runtime inputs for step.gh_pr_merge.
+message PRMergeInput {
+  google.protobuf.Struct data = 1;
+}
+
+// PRMergeOutput holds the result of step.gh_pr_merge.
+message PRMergeOutput {
+  bool merged = 1;
+  string message = 2;
+  string sha = 3;
+}
+
+// PRCommentConfig is the typed config for step.gh_pr_comment.
+message PRCommentConfig {
+  string owner = 1;
+  string repo = 2;
+  int64 pr_number = 3;
+  string body = 4;
+  string token = 5;
+}
+
+// PRCommentInput carries runtime inputs for step.gh_pr_comment.
+message PRCommentInput {
+  google.protobuf.Struct data = 1;
+}
+
+// PRCommentOutput holds the result of step.gh_pr_comment.
+message PRCommentOutput {
+  int64 comment_id = 1;
+  string url = 2;
+}
+
+// PRReviewConfig is the typed config for step.gh_pr_review.
+message PRReviewConfig {
+  string owner = 1;
+  string repo = 2;
+  int64 pr_number = 3;
+  string event = 4;
+  string body = 5;
+  string token = 6;
+}
+
+// PRReviewInput carries runtime inputs for step.gh_pr_review.
+message PRReviewInput {
+  google.protobuf.Struct data = 1;
+}
+
+// PRReviewOutput holds the result of step.gh_pr_review.
+message PRReviewOutput {
+  int64 review_id = 1;
+  string state = 2;
+  string url = 3;
+}
+
+// IssueCreateConfig is the typed config for step.gh_issue_create.
+message IssueCreateConfig {
+  string owner = 1;
+  string repo = 2;
+  string title = 3;
+  string body = 4;
+  repeated string labels = 5;
+  repeated string assignees = 6;
+  string token = 7;
+}
+
+// IssueCreateInput carries runtime inputs for step.gh_issue_create.
+message IssueCreateInput {
+  google.protobuf.Struct data = 1;
+}
+
+// IssueCreateOutput holds the result of step.gh_issue_create.
+message IssueCreateOutput {
+  int64 number = 1;
+  string url = 2;
+  int64 id = 3;
+  string state = 4;
+}
+
+// IssueCloseConfig is the typed config for step.gh_issue_close.
+message IssueCloseConfig {
+  string owner = 1;
+  string repo = 2;
+  int64 issue_number = 3;
+  string comment = 4;
+  string token = 5;
+}
+
+// IssueCloseInput carries runtime inputs for step.gh_issue_close.
+message IssueCloseInput {
+  google.protobuf.Struct data = 1;
+}
+
+// IssueCloseOutput holds the result of step.gh_issue_close.
+message IssueCloseOutput {
+  int64 number = 1;
+  string state = 2;
+  string url = 3;
+}
+
+// IssueLabelConfig is the typed config for step.gh_issue_label.
+message IssueLabelConfig {
+  string owner = 1;
+  string repo = 2;
+  int64 issue_number = 3;
+  repeated string add = 4;
+  repeated string remove = 5;
+  string token = 6;
+}
+
+// IssueLabelInput carries runtime inputs for step.gh_issue_label.
+message IssueLabelInput {
+  google.protobuf.Struct data = 1;
+}
+
+// IssueLabelOutput holds the result of step.gh_issue_label.
+message IssueLabelOutput {
+  repeated string added = 1;
+  repeated string removed = 2;
+}
+
+// ReleaseCreateConfig is the typed config for step.gh_release_create.
+message ReleaseCreateConfig {
+  string owner = 1;
+  string repo = 2;
+  string tag = 3;
+  string name = 4;
+  string body = 5;
+  bool draft = 6;
+  bool prerelease = 7;
+  string token = 8;
+}
+
+// ReleaseCreateInput carries runtime inputs for step.gh_release_create.
+message ReleaseCreateInput {
+  google.protobuf.Struct data = 1;
+}
+
+// ReleaseCreateOutput holds the result of step.gh_release_create.
+message ReleaseCreateOutput {
+  int64 release_id = 1;
+  string url = 2;
+  string upload_url = 3;
+  string tag = 4;
+  bool draft = 5;
+  bool prerelease = 6;
+}
+
+// ReleaseUploadConfig is the typed config for step.gh_release_upload.
+message ReleaseUploadConfig {
+  string owner = 1;
+  string repo = 2;
+  string release_id = 3;
+  string file = 4;
+  string name = 5;
+  string token = 6;
+}
+
+// ReleaseUploadInput carries runtime inputs for step.gh_release_upload.
+message ReleaseUploadInput {
+  google.protobuf.Struct data = 1;
+}
+
+// ReleaseUploadOutput holds the result of step.gh_release_upload.
+message ReleaseUploadOutput {
+  int64 asset_id = 1;
+  string url = 2;
+  string name = 3;
+  int64 size = 4;
+}
+
+// RepoDispatchConfig is the typed config for step.gh_repo_dispatch.
+message RepoDispatchConfig {
+  string owner = 1;
+  string repo = 2;
+  string event_type = 3;
+  google.protobuf.Struct payload = 4;
+  string token = 5;
+}
+
+// RepoDispatchInput carries runtime inputs for step.gh_repo_dispatch.
+message RepoDispatchInput {
+  google.protobuf.Struct data = 1;
+}
+
+// RepoDispatchOutput holds the result of step.gh_repo_dispatch.
+message RepoDispatchOutput {
+  bool dispatched = 1;
+  string event_type = 2;
+  string owner = 3;
+  string repo = 4;
+}
+
+// DeploymentCreateConfig is the typed config for step.gh_deployment_create.
+message DeploymentCreateConfig {
+  string owner = 1;
+  string repo = 2;
+  string ref = 3;
+  string environment = 4;
+  string description = 5;
+  bool auto_merge = 6;
+  string token = 7;
+}
+
+// DeploymentCreateInput carries runtime inputs for step.gh_deployment_create.
+message DeploymentCreateInput {
+  google.protobuf.Struct data = 1;
+}
+
+// DeploymentCreateOutput holds the result of step.gh_deployment_create.
+message DeploymentCreateOutput {
+  int64 deployment_id = 1;
+  string environment = 2;
+  string ref = 3;
+  string sha = 4;
+  string url = 5;
+}
+
+// SecretSetConfig is the typed config for step.gh_secret_set.
+message SecretSetConfig {
+  string owner = 1;
+  string repo = 2;
+  string name = 3;
+  string value = 4;
+  string token = 5;
+}
+
+// SecretSetInput carries runtime inputs for step.gh_secret_set.
+message SecretSetInput {
+  google.protobuf.Struct data = 1;
+}
+
+// SecretSetOutput holds the result of step.gh_secret_set.
+message SecretSetOutput {
+  string name = 1;
+  string owner = 2;
+  string repo = 3;
+  bool set = 4;
+}
+
+// GraphQLConfig is the typed config for step.gh_graphql.
+message GraphQLConfig {
+  string query = 1;
+  google.protobuf.Struct variables = 2;
+  string token = 3;
+}
+
+// GraphQLInput carries runtime inputs for step.gh_graphql.
+message GraphQLInput {
+  google.protobuf.Struct data = 1;
+}
+
+// GraphQLOutput holds the result of step.gh_graphql.
+message GraphQLOutput {
+  google.protobuf.Struct data = 1;
+  int32 status = 2;
+}

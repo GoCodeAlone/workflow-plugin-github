@@ -45,6 +45,8 @@ archives:
     name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
     files:
       - plugin.json
+      - plugin.contracts.json
+      - LICENSE
 
 checksum:
   name_template: "checksums.txt"

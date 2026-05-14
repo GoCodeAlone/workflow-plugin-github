@@ -31,6 +31,162 @@
         "step.gh_graphql"
     ],
     "triggerTypes": [],
+    "contracts": [
+        {
+            "kind": "module",
+            "type": "git.webhook",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.WebhookModuleConfig"
+        },
+        {
+            "kind": "module",
+            "type": "github.app",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.GitHubAppModuleConfig"
+        },
+        {
+            "kind": "module",
+            "type": "github.runner_provider",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.RunnerProviderModuleConfig"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_action_trigger",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.ActionTriggerConfig",
+            "input": "workflow.plugin.github.v1.ActionTriggerInput",
+            "output": "workflow.plugin.github.v1.ActionTriggerOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_action_status",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.ActionStatusConfig",
+            "input": "workflow.plugin.github.v1.ActionStatusInput",
+            "output": "workflow.plugin.github.v1.ActionStatusOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_compute_gateway",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.ComputeGatewayConfig",
+            "input": "workflow.plugin.github.v1.ComputeGatewayInput",
+            "output": "workflow.plugin.github.v1.ComputeGatewayOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_create_check",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.CreateCheckConfig",
+            "input": "workflow.plugin.github.v1.CreateCheckInput",
+            "output": "workflow.plugin.github.v1.CreateCheckOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_pr_create",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.PRCreateConfig",
+            "input": "workflow.plugin.github.v1.PRCreateInput",
+            "output": "workflow.plugin.github.v1.PRCreateOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_pr_merge",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.PRMergeConfig",
+            "input": "workflow.plugin.github.v1.PRMergeInput",
+            "output": "workflow.plugin.github.v1.PRMergeOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_pr_comment",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.PRCommentConfig",
+            "input": "workflow.plugin.github.v1.PRCommentInput",
+            "output": "workflow.plugin.github.v1.PRCommentOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_pr_review",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.PRReviewConfig",
+            "input": "workflow.plugin.github.v1.PRReviewInput",
+            "output": "workflow.plugin.github.v1.PRReviewOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_issue_create",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.IssueCreateConfig",
+            "input": "workflow.plugin.github.v1.IssueCreateInput",
+            "output": "workflow.plugin.github.v1.IssueCreateOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_issue_close",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.IssueCloseConfig",
+            "input": "workflow.plugin.github.v1.IssueCloseInput",
+            "output": "workflow.plugin.github.v1.IssueCloseOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_issue_label",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.IssueLabelConfig",
+            "input": "workflow.plugin.github.v1.IssueLabelInput",
+            "output": "workflow.plugin.github.v1.IssueLabelOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_release_create",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.ReleaseCreateConfig",
+            "input": "workflow.plugin.github.v1.ReleaseCreateInput",
+            "output": "workflow.plugin.github.v1.ReleaseCreateOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_release_upload",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.ReleaseUploadConfig",
+            "input": "workflow.plugin.github.v1.ReleaseUploadInput",
+            "output": "workflow.plugin.github.v1.ReleaseUploadOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_repo_dispatch",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.RepoDispatchConfig",
+            "input": "workflow.plugin.github.v1.RepoDispatchInput",
+            "output": "workflow.plugin.github.v1.RepoDispatchOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_deployment_create",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.DeploymentCreateConfig",
+            "input": "workflow.plugin.github.v1.DeploymentCreateInput",
+            "output": "workflow.plugin.github.v1.DeploymentCreateOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_secret_set",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.SecretSetConfig",
+            "input": "workflow.plugin.github.v1.SecretSetInput",
+            "output": "workflow.plugin.github.v1.SecretSetOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_graphql",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.GraphQLConfig",
+            "input": "workflow.plugin.github.v1.GraphQLInput",
+            "output": "workflow.plugin.github.v1.GraphQLOutput"
+        }
+    ],
     "stepSchemas": [
         {
             "type": "step.gh_action_trigger",
