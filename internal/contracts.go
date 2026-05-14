@@ -3,6 +3,7 @@ package internal
 import (
 	githubv1 "github.com/GoCodeAlone/workflow-plugin-github/gen"
 	pb "github.com/GoCodeAlone/workflow/plugin/external/proto"
+	sdk "github.com/GoCodeAlone/workflow/plugin/external/sdk"
 	"google.golang.org/protobuf/reflect/protodesc"
 	"google.golang.org/protobuf/types/descriptorpb"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -190,4 +191,4 @@ var githubContractRegistry = &pb.ContractRegistry{
 const githubProtoPkg = "workflow.plugin.github.v1."
 
 // Compile-time assertion: githubPlugin implements sdk.ContractProvider.
-var _ interface{ ContractRegistry() *pb.ContractRegistry } = (*githubPlugin)(nil)
+var _ sdk.ContractProvider = (*githubPlugin)(nil)
