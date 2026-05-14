@@ -1,6 +1,6 @@
 {
     "name": "workflow-plugin-github",
-    "version": "1.0.1",
+    "version": "1.0.3",
     "description": "GitHub integration plugin: webhook handling, GitHub Actions, PRs, issues, releases, and deployments",
     "author": "GoCodeAlone",
     "license": "MIT",
