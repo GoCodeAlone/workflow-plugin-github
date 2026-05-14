@@ -38,6 +38,7 @@ jobs:
       - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
         with:
           version: ${{ steps.wfctl-ver.outputs.version }}
+          token: ${{ secrets.RELEASES_TOKEN }}
 
       - name: Validate strict plugin contracts
         run: wfctl plugin validate --file plugin.json --strict-contracts
