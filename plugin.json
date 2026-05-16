@@ -1,568 +1,1494 @@
 {
-    "name": "workflow-plugin-github",
-    "version": "1.0.3",
-    "description": "GitHub integration plugin: webhook handling, GitHub Actions, PRs, issues, releases, and deployments",
-    "author": "GoCodeAlone",
-    "license": "MIT",
-    "type": "external",
-    "tier": "community",
-    "minEngineVersion": "0.53.0",
-    "keywords": ["github", "webhook", "git", "actions", "ci", "cd", "integration", "pull-request", "release"],
-    "homepage": "https://github.com/GoCodeAlone/workflow-plugin-github",
-    "repository": "https://github.com/GoCodeAlone/workflow-plugin-github",
-    "downloads": [
+  "name": "workflow-plugin-github",
+  "version": "1.0.4",
+  "description": "GitHub integration plugin: webhook handling, GitHub Actions, PRs, issues, releases, and deployments",
+  "author": "GoCodeAlone",
+  "license": "MIT",
+  "type": "external",
+  "tier": "community",
+  "minEngineVersion": "0.53.0",
+  "keywords": [
+    "github",
+    "webhook",
+    "git",
+    "actions",
+    "ci",
+    "cd",
+    "integration",
+    "pull-request",
+    "release"
+  ],
+  "homepage": "https://github.com/GoCodeAlone/workflow-plugin-github",
+  "repository": "https://github.com/GoCodeAlone/workflow-plugin-github",
+  "downloads": [
+    {
+      "os": "linux",
+      "arch": "amd64",
+      "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-linux-amd64.tar.gz"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64",
+      "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-linux-arm64.tar.gz"
+    },
+    {
+      "os": "darwin",
+      "arch": "amd64",
+      "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-darwin-amd64.tar.gz"
+    },
+    {
+      "os": "darwin",
+      "arch": "arm64",
+      "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-darwin-arm64.tar.gz"
+    },
+    {
+      "os": "windows",
+      "arch": "amd64",
+      "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-windows-amd64.tar.gz"
+    }
+  ],
+  "moduleTypes": [
+    "git.webhook",
+    "github.app",
+    "github.runner_provider"
+  ],
+  "stepTypes": [
+    "step.gh_action_trigger",
+    "step.gh_action_status",
+    "step.gh_compute_gateway",
+    "step.gh_create_check",
+    "step.gh_pr_create",
+    "step.gh_pr_merge",
+    "step.gh_pr_comment",
+    "step.gh_pr_review",
+    "step.gh_issue_create",
+    "step.gh_issue_close",
+    "step.gh_issue_label",
+    "step.gh_release_create",
+    "step.gh_release_upload",
+    "step.gh_repo_dispatch",
+    "step.gh_deployment_create",
+    "step.gh_secret_set",
+    "step.gh_graphql"
+  ],
+  "triggerTypes": [],
+  "contracts": [
+    {
+      "kind": "module",
+      "type": "git.webhook",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.WebhookModuleConfig"
+    },
+    {
+      "kind": "module",
+      "type": "github.app",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.GitHubAppModuleConfig"
+    },
+    {
+      "kind": "module",
+      "type": "github.runner_provider",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.RunnerProviderModuleConfig"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_action_trigger",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.ActionTriggerConfig",
+      "input": "workflow.plugin.github.v1.ActionTriggerInput",
+      "output": "workflow.plugin.github.v1.ActionTriggerOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_action_status",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.ActionStatusConfig",
+      "input": "workflow.plugin.github.v1.ActionStatusInput",
+      "output": "workflow.plugin.github.v1.ActionStatusOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_compute_gateway",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.ComputeGatewayConfig",
+      "input": "workflow.plugin.github.v1.ComputeGatewayInput",
+      "output": "workflow.plugin.github.v1.ComputeGatewayOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_create_check",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.CreateCheckConfig",
+      "input": "workflow.plugin.github.v1.CreateCheckInput",
+      "output": "workflow.plugin.github.v1.CreateCheckOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_pr_create",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.PRCreateConfig",
+      "input": "workflow.plugin.github.v1.PRCreateInput",
+      "output": "workflow.plugin.github.v1.PRCreateOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_pr_merge",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.PRMergeConfig",
+      "input": "workflow.plugin.github.v1.PRMergeInput",
+      "output": "workflow.plugin.github.v1.PRMergeOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_pr_comment",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.PRCommentConfig",
+      "input": "workflow.plugin.github.v1.PRCommentInput",
+      "output": "workflow.plugin.github.v1.PRCommentOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_pr_review",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.PRReviewConfig",
+      "input": "workflow.plugin.github.v1.PRReviewInput",
+      "output": "workflow.plugin.github.v1.PRReviewOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_issue_create",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.IssueCreateConfig",
+      "input": "workflow.plugin.github.v1.IssueCreateInput",
+      "output": "workflow.plugin.github.v1.IssueCreateOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_issue_close",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.IssueCloseConfig",
+      "input": "workflow.plugin.github.v1.IssueCloseInput",
+      "output": "workflow.plugin.github.v1.IssueCloseOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_issue_label",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.IssueLabelConfig",
+      "input": "workflow.plugin.github.v1.IssueLabelInput",
+      "output": "workflow.plugin.github.v1.IssueLabelOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_release_create",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.ReleaseCreateConfig",
+      "input": "workflow.plugin.github.v1.ReleaseCreateInput",
+      "output": "workflow.plugin.github.v1.ReleaseCreateOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_release_upload",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.ReleaseUploadConfig",
+      "input": "workflow.plugin.github.v1.ReleaseUploadInput",
+      "output": "workflow.plugin.github.v1.ReleaseUploadOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_repo_dispatch",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.RepoDispatchConfig",
+      "input": "workflow.plugin.github.v1.RepoDispatchInput",
+      "output": "workflow.plugin.github.v1.RepoDispatchOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_deployment_create",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.DeploymentCreateConfig",
+      "input": "workflow.plugin.github.v1.DeploymentCreateInput",
+      "output": "workflow.plugin.github.v1.DeploymentCreateOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_secret_set",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.SecretSetConfig",
+      "input": "workflow.plugin.github.v1.SecretSetInput",
+      "output": "workflow.plugin.github.v1.SecretSetOutput"
+    },
+    {
+      "kind": "step",
+      "type": "step.gh_graphql",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.GraphQLConfig",
+      "input": "workflow.plugin.github.v1.GraphQLInput",
+      "output": "workflow.plugin.github.v1.GraphQLOutput"
+    }
+  ],
+  "stepSchemas": [
+    {
+      "type": "step.gh_action_trigger",
+      "plugin": "workflow-plugin-github",
+      "description": "Triggers a GitHub Actions workflow run via the workflow_dispatch API.",
+      "configFields": [
         {
-            "os": "linux",
-            "arch": "amd64",
-            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-linux-amd64.tar.gz"
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner (user or organisation)",
+          "required": true
         },
         {
-            "os": "linux",
-            "arch": "arm64",
-            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-linux-arm64.tar.gz"
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
         },
         {
-            "os": "darwin",
-            "arch": "amd64",
-            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-darwin-amd64.tar.gz"
+          "key": "workflow",
+          "type": "string",
+          "description": "Workflow filename or ID (e.g. ci.yml)",
+          "required": true
         },
         {
-            "os": "darwin",
-            "arch": "arm64",
-            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-darwin-arm64.tar.gz"
+          "key": "ref",
+          "type": "string",
+          "description": "Branch or tag reference to run the workflow on",
+          "defaultValue": "main"
         },
         {
-            "os": "windows",
-            "arch": "amd64",
-            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-windows-amd64.tar.gz"
+          "key": "inputs",
+          "type": "map",
+          "description": "Optional workflow_dispatch input key/value pairs"
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token with workflow scope",
+          "required": true,
+          "sensitive": true
         }
-    ],
-    "moduleTypes": ["git.webhook", "github.app", "github.runner_provider"],
-    "stepTypes": [
-        "step.gh_action_trigger",
-        "step.gh_action_status",
-        "step.gh_compute_gateway",
-        "step.gh_create_check",
-        "step.gh_pr_create",
-        "step.gh_pr_merge",
-        "step.gh_pr_comment",
-        "step.gh_pr_review",
-        "step.gh_issue_create",
-        "step.gh_issue_close",
-        "step.gh_issue_label",
-        "step.gh_release_create",
-        "step.gh_release_upload",
-        "step.gh_repo_dispatch",
-        "step.gh_deployment_create",
-        "step.gh_secret_set",
-        "step.gh_graphql"
-    ],
-    "triggerTypes": [],
-    "contracts": [
+      ],
+      "outputs": [
         {
-            "kind": "module",
-            "type": "git.webhook",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.WebhookModuleConfig"
+          "key": "triggered",
+          "type": "boolean",
+          "description": "Whether the workflow run was successfully triggered"
         },
         {
-            "kind": "module",
-            "type": "github.app",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.GitHubAppModuleConfig"
+          "key": "owner",
+          "type": "string",
+          "description": "Repository owner"
         },
         {
-            "kind": "module",
-            "type": "github.runner_provider",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.RunnerProviderModuleConfig"
+          "key": "repo",
+          "type": "string",
+          "description": "Repository name"
         },
         {
-            "kind": "step",
-            "type": "step.gh_action_trigger",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.ActionTriggerConfig",
-            "input": "workflow.plugin.github.v1.ActionTriggerInput",
-            "output": "workflow.plugin.github.v1.ActionTriggerOutput"
+          "key": "workflow",
+          "type": "string",
+          "description": "Workflow filename or ID"
         },
         {
-            "kind": "step",
-            "type": "step.gh_action_status",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.ActionStatusConfig",
-            "input": "workflow.plugin.github.v1.ActionStatusInput",
-            "output": "workflow.plugin.github.v1.ActionStatusOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_compute_gateway",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.ComputeGatewayConfig",
-            "input": "workflow.plugin.github.v1.ComputeGatewayInput",
-            "output": "workflow.plugin.github.v1.ComputeGatewayOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_create_check",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.CreateCheckConfig",
-            "input": "workflow.plugin.github.v1.CreateCheckInput",
-            "output": "workflow.plugin.github.v1.CreateCheckOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_pr_create",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.PRCreateConfig",
-            "input": "workflow.plugin.github.v1.PRCreateInput",
-            "output": "workflow.plugin.github.v1.PRCreateOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_pr_merge",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.PRMergeConfig",
-            "input": "workflow.plugin.github.v1.PRMergeInput",
-            "output": "workflow.plugin.github.v1.PRMergeOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_pr_comment",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.PRCommentConfig",
-            "input": "workflow.plugin.github.v1.PRCommentInput",
-            "output": "workflow.plugin.github.v1.PRCommentOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_pr_review",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.PRReviewConfig",
-            "input": "workflow.plugin.github.v1.PRReviewInput",
-            "output": "workflow.plugin.github.v1.PRReviewOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_issue_create",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.IssueCreateConfig",
-            "input": "workflow.plugin.github.v1.IssueCreateInput",
-            "output": "workflow.plugin.github.v1.IssueCreateOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_issue_close",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.IssueCloseConfig",
-            "input": "workflow.plugin.github.v1.IssueCloseInput",
-            "output": "workflow.plugin.github.v1.IssueCloseOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_issue_label",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.IssueLabelConfig",
-            "input": "workflow.plugin.github.v1.IssueLabelInput",
-            "output": "workflow.plugin.github.v1.IssueLabelOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_release_create",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.ReleaseCreateConfig",
-            "input": "workflow.plugin.github.v1.ReleaseCreateInput",
-            "output": "workflow.plugin.github.v1.ReleaseCreateOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_release_upload",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.ReleaseUploadConfig",
-            "input": "workflow.plugin.github.v1.ReleaseUploadInput",
-            "output": "workflow.plugin.github.v1.ReleaseUploadOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_repo_dispatch",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.RepoDispatchConfig",
-            "input": "workflow.plugin.github.v1.RepoDispatchInput",
-            "output": "workflow.plugin.github.v1.RepoDispatchOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_deployment_create",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.DeploymentCreateConfig",
-            "input": "workflow.plugin.github.v1.DeploymentCreateInput",
-            "output": "workflow.plugin.github.v1.DeploymentCreateOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_secret_set",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.SecretSetConfig",
-            "input": "workflow.plugin.github.v1.SecretSetInput",
-            "output": "workflow.plugin.github.v1.SecretSetOutput"
-        },
-        {
-            "kind": "step",
-            "type": "step.gh_graphql",
-            "mode": "strict_proto",
-            "config": "workflow.plugin.github.v1.GraphQLConfig",
-            "input": "workflow.plugin.github.v1.GraphQLInput",
-            "output": "workflow.plugin.github.v1.GraphQLOutput"
+          "key": "ref",
+          "type": "string",
+          "description": "Branch or tag reference"
         }
-    ],
-    "stepSchemas": [
+      ]
+    },
+    {
+      "type": "step.gh_action_status",
+      "plugin": "workflow-plugin-github",
+      "description": "Checks (and optionally polls) the status of a GitHub Actions workflow run.",
+      "configFields": [
         {
-            "type": "step.gh_action_trigger",
-            "plugin": "workflow-plugin-github",
-            "description": "Triggers a GitHub Actions workflow run via the workflow_dispatch API.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner (user or organisation)", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "workflow", "type": "string", "description": "Workflow filename or ID (e.g. ci.yml)", "required": true},
-                {"key": "ref", "type": "string", "description": "Branch or tag reference to run the workflow on", "defaultValue": "main"},
-                {"key": "inputs", "type": "map", "description": "Optional workflow_dispatch input key/value pairs"},
-                {"key": "token", "type": "string", "description": "GitHub personal access token with workflow scope", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "triggered", "type": "boolean", "description": "Whether the workflow run was successfully triggered"},
-                {"key": "owner", "type": "string", "description": "Repository owner"},
-                {"key": "repo", "type": "string", "description": "Repository name"},
-                {"key": "workflow", "type": "string", "description": "Workflow filename or ID"},
-                {"key": "ref", "type": "string", "description": "Branch or tag reference"}
-            ]
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
         },
         {
-            "type": "step.gh_action_status",
-            "plugin": "workflow-plugin-github",
-            "description": "Checks (and optionally polls) the status of a GitHub Actions workflow run.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "run_id", "type": "string", "description": "Workflow run ID (numeric literal or template expression e.g. {{.steps.trigger_step.run_id}})", "required": true},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true},
-                {"key": "wait", "type": "boolean", "description": "Poll until the run reaches a terminal state", "defaultValue": false},
-                {"key": "poll_interval", "type": "duration", "description": "Interval between status polls when wait=true", "defaultValue": "10s"},
-                {"key": "timeout", "type": "duration", "description": "Maximum time to wait when wait=true", "defaultValue": "30m"}
-            ],
-            "outputs": [
-                {"key": "run_id", "type": "number", "description": "Workflow run ID"},
-                {"key": "status", "type": "string", "description": "Run status (e.g. queued, in_progress, completed)"},
-                {"key": "conclusion", "type": "string", "description": "Run conclusion (e.g. success, failure, cancelled)"},
-                {"key": "url", "type": "string", "description": "URL to the workflow run"}
-            ]
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
         },
         {
-            "type": "step.gh_compute_gateway",
-            "plugin": "workflow-plugin-github",
-            "description": "Submits a GitHub-origin workload to workflow-compute's protected GitHub gateway and waits for proof-backed completion.",
-            "configFields": [
-                {"key": "server_url", "type": "string", "description": "workflow-compute control plane URL", "required": true},
-                {"key": "token", "type": "string", "description": "workflow-compute credential with github gateway scopes", "required": true, "sensitive": true},
-                {"key": "repository", "type": "string", "description": "GitHub repository in owner/name form", "required": true},
-                {"key": "oidc_token", "type": "string", "description": "GitHub Actions OIDC token proving workflow job provenance", "required": true, "sensitive": true},
-                {"key": "workflow_run_id", "type": "string", "description": "Workflow run ID (numeric literal or template expression)", "required": true},
-                {"key": "workflow_run_attempt", "type": "string", "description": "Workflow run attempt (numeric literal or template expression)"},
-                {"key": "workflow_job_id", "type": "string", "description": "Workflow job ID (numeric literal or template expression)", "required": true},
-                {"key": "workflow_job_name", "type": "string", "description": "Workflow job name", "required": true},
-                {"key": "ref", "type": "string", "description": "Git ref associated with the workload"},
-                {"key": "sha", "type": "string", "description": "Commit SHA associated with the workload"},
-                {"key": "org_id", "type": "string", "description": "workflow-compute organization ID", "required": true},
-                {"key": "pool_id", "type": "string", "description": "workflow-compute pool ID", "required": true},
-                {"key": "policy_id", "type": "string", "description": "workflow-compute policy ID", "required": true},
-                {"key": "command_args", "type": "array", "description": "Command argv to execute inside the protected compute provider", "required": true},
-                {"key": "working_directory", "type": "string", "description": "Optional working directory for command workloads"},
-                {"key": "artifact_allowlist", "type": "array", "description": "Output artifact paths the agent may return"},
-                {"key": "labels", "type": "map", "description": "Additional non-github workload labels"},
-                {"key": "executor_provider", "type": "string", "description": "Optional executor provider selector"},
-                {"key": "execution_security_tier", "type": "string", "description": "Protected execution tier", "defaultValue": "sandboxed-container"},
-                {"key": "proof_tier", "type": "string", "description": "Proof tier required for success", "defaultValue": "artifact-hash"},
-                {"key": "hardware_class", "type": "string", "description": "Optional hardware security class selector"},
-                {"key": "wait", "type": "boolean", "description": "Poll workflow-compute until proof-backed completion; must be true for this provider", "required": true, "defaultValue": true},
-                {"key": "poll_interval", "type": "duration", "description": "Interval between status polls when wait=true", "defaultValue": "10s"},
-                {"key": "timeout", "type": "duration", "description": "Maximum time to wait when wait=true", "defaultValue": "30m"},
-                {"key": "write_check", "type": "boolean", "description": "Create a GitHub Check Run when the compute workload reaches a terminal status", "defaultValue": false},
-                {"key": "check_owner", "type": "string", "description": "Owner for the GitHub Check Run target"},
-                {"key": "check_repo", "type": "string", "description": "Repository for the GitHub Check Run target"},
-                {"key": "check_sha", "type": "string", "description": "Commit SHA for the GitHub Check Run target"},
-                {"key": "check_name", "type": "string", "description": "GitHub Check Run name"},
-                {"key": "check_token", "type": "string", "description": "GitHub token for creating the Check Run", "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "task_id", "type": "string", "description": "workflow-compute task ID"},
-                {"key": "status", "type": "string", "description": "workflow-compute task status"},
-                {"key": "conclusion", "type": "string", "description": "Proof-backed conclusion"},
-                {"key": "proof_id", "type": "string", "description": "Accepted proof receipt ID"},
-                {"key": "artifact_hash", "type": "string", "description": "Returned artifact hash"},
-                {"key": "contribution_id", "type": "string", "description": "Contribution ledger event ID"},
-                {"key": "worker_id", "type": "string", "description": "Worker that completed the accepted proof"},
-                {"key": "check_run_id", "type": "number", "description": "GitHub Check Run ID when write_check=true"},
-                {"key": "check_url", "type": "string", "description": "GitHub Check Run URL when write_check=true"}
-            ]
+          "key": "run_id",
+          "type": "string",
+          "description": "Workflow run ID (numeric literal or template expression e.g. {{.steps.trigger_step.run_id}})",
+          "required": true
         },
         {
-            "type": "step.gh_create_check",
-            "plugin": "workflow-plugin-github",
-            "description": "Creates a GitHub Check Run (status check) on a specific commit.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "sha", "type": "string", "description": "Commit SHA to associate the check with", "required": true},
-                {"key": "name", "type": "string", "description": "Name of the check run", "required": true},
-                {"key": "status", "type": "select", "description": "Check run status", "options": ["queued", "in_progress", "completed"], "defaultValue": "queued"},
-                {"key": "conclusion", "type": "select", "description": "Check run conclusion (required when status=completed)", "options": ["success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required"]},
-                {"key": "title", "type": "string", "description": "Check output title"},
-                {"key": "summary", "type": "string", "description": "Check output summary"},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "check_run_id", "type": "number", "description": "Check run ID"},
-                {"key": "status", "type": "string", "description": "Check run status"},
-                {"key": "url", "type": "string", "description": "URL to the check run"}
-            ]
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
         },
         {
-            "type": "step.gh_pr_create",
-            "plugin": "workflow-plugin-github",
-            "description": "Creates a pull request in a GitHub repository.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "head", "type": "string", "description": "Source branch name", "required": true},
-                {"key": "base", "type": "string", "description": "Target branch name", "defaultValue": "main"},
-                {"key": "title", "type": "string", "description": "Pull request title"},
-                {"key": "body", "type": "string", "description": "Pull request description"},
-                {"key": "draft", "type": "boolean", "description": "Whether to create as a draft PR", "defaultValue": false},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "number", "type": "number", "description": "Pull request number"},
-                {"key": "url", "type": "string", "description": "Pull request URL"},
-                {"key": "id", "type": "number", "description": "Pull request ID"},
-                {"key": "state", "type": "string", "description": "Pull request state (open/closed)"}
-            ]
+          "key": "wait",
+          "type": "boolean",
+          "description": "Poll until the run reaches a terminal state",
+          "defaultValue": false
         },
         {
-            "type": "step.gh_pr_merge",
-            "plugin": "workflow-plugin-github",
-            "description": "Merges a pull request in a GitHub repository.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "pr_number", "type": "number", "description": "Pull request number to merge", "required": true},
-                {"key": "commit_title", "type": "string", "description": "Merge commit title"},
-                {"key": "method", "type": "string", "description": "Merge method: merge, squash, or rebase (also accepts template expressions)", "defaultValue": "merge"},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "merged", "type": "boolean", "description": "Whether the merge succeeded"},
-                {"key": "message", "type": "string", "description": "Result message from GitHub"},
-                {"key": "sha", "type": "string", "description": "Merge commit SHA"}
-            ]
+          "key": "poll_interval",
+          "type": "duration",
+          "description": "Interval between status polls when wait=true",
+          "defaultValue": "10s"
         },
         {
-            "type": "step.gh_pr_comment",
-            "plugin": "workflow-plugin-github",
-            "description": "Adds a comment to a GitHub pull request.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "pr_number", "type": "number", "description": "Pull request number", "required": true},
-                {"key": "body", "type": "string", "description": "Comment text"},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "comment_id", "type": "number", "description": "Comment ID"},
-                {"key": "url", "type": "string", "description": "Comment URL"}
-            ]
-        },
-        {
-            "type": "step.gh_pr_review",
-            "plugin": "workflow-plugin-github",
-            "description": "Submits a review on a GitHub pull request (approve, request changes, or comment).",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "pr_number", "type": "number", "description": "Pull request number", "required": true},
-                {"key": "event", "type": "string", "description": "Review event type: APPROVE, REQUEST_CHANGES, or COMMENT (also accepts template expressions)", "defaultValue": "COMMENT"},
-                {"key": "body", "type": "string", "description": "Review body text"},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "review_id", "type": "number", "description": "Review ID"},
-                {"key": "state", "type": "string", "description": "Review state"},
-                {"key": "url", "type": "string", "description": "Review URL"}
-            ]
-        },
-        {
-            "type": "step.gh_issue_create",
-            "plugin": "workflow-plugin-github",
-            "description": "Creates a GitHub issue.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "title", "type": "string", "description": "Issue title"},
-                {"key": "body", "type": "string", "description": "Issue body"},
-                {"key": "labels", "type": "array", "description": "Labels to attach to the issue"},
-                {"key": "assignees", "type": "array", "description": "GitHub usernames to assign to the issue"},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "number", "type": "number", "description": "Issue number"},
-                {"key": "url", "type": "string", "description": "Issue URL"},
-                {"key": "id", "type": "number", "description": "Issue ID"},
-                {"key": "state", "type": "string", "description": "Issue state (open)"}
-            ]
-        },
-        {
-            "type": "step.gh_issue_close",
-            "plugin": "workflow-plugin-github",
-            "description": "Closes a GitHub issue, optionally adding a comment before closing.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "issue_number", "type": "number", "description": "Issue number to close", "required": true},
-                {"key": "comment", "type": "string", "description": "Optional closing comment"},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "number", "type": "number", "description": "Issue number"},
-                {"key": "state", "type": "string", "description": "Issue state (closed)"},
-                {"key": "url", "type": "string", "description": "Issue URL"}
-            ]
-        },
-        {
-            "type": "step.gh_issue_label",
-            "plugin": "workflow-plugin-github",
-            "description": "Adds or removes labels on a GitHub issue or pull request.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "issue_number", "type": "number", "description": "Issue or pull request number", "required": true},
-                {"key": "add", "type": "array", "description": "Labels to add"},
-                {"key": "remove", "type": "array", "description": "Labels to remove"},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "added", "type": "array", "description": "Labels that were added"},
-                {"key": "removed", "type": "array", "description": "Labels that were removed"}
-            ]
-        },
-        {
-            "type": "step.gh_release_create",
-            "plugin": "workflow-plugin-github",
-            "description": "Creates a GitHub release.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "tag", "type": "string", "description": "Git tag name for the release", "required": true},
-                {"key": "name", "type": "string", "description": "Release display name"},
-                {"key": "body", "type": "string", "description": "Release notes / changelog"},
-                {"key": "draft", "type": "boolean", "description": "Whether to create as a draft release", "defaultValue": false},
-                {"key": "prerelease", "type": "boolean", "description": "Whether this is a pre-release", "defaultValue": false},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "release_id", "type": "number", "description": "Release ID"},
-                {"key": "url", "type": "string", "description": "Release URL"},
-                {"key": "upload_url", "type": "string", "description": "Asset upload URL"},
-                {"key": "tag", "type": "string", "description": "Tag name"},
-                {"key": "draft", "type": "boolean", "description": "Whether the release is a draft"},
-                {"key": "prerelease", "type": "boolean", "description": "Whether the release is a pre-release"}
-            ]
-        },
-        {
-            "type": "step.gh_release_upload",
-            "plugin": "workflow-plugin-github",
-            "description": "Uploads a file asset to an existing GitHub release.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "release_id", "type": "string", "description": "Release ID (numeric literal or template expression e.g. {{.steps.create_release.release_id}})", "required": true},
-                {"key": "file", "type": "filepath", "description": "Local path to the file to upload", "required": true},
-                {"key": "name", "type": "string", "description": "Display name for the release asset"},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "asset_id", "type": "number", "description": "Asset ID"},
-                {"key": "url", "type": "string", "description": "Asset download URL"},
-                {"key": "name", "type": "string", "description": "Asset name"},
-                {"key": "size", "type": "number", "description": "Asset file size in bytes"}
-            ]
-        },
-        {
-            "type": "step.gh_repo_dispatch",
-            "plugin": "workflow-plugin-github",
-            "description": "Sends a repository_dispatch event to trigger external GitHub Actions workflows.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "event_type", "type": "string", "description": "Custom event type name", "required": true},
-                {"key": "payload", "type": "map", "description": "Client payload data to include with the event"},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "dispatched", "type": "boolean", "description": "Whether the event was dispatched"},
-                {"key": "event_type", "type": "string", "description": "Event type that was dispatched"},
-                {"key": "owner", "type": "string", "description": "Repository owner"},
-                {"key": "repo", "type": "string", "description": "Repository name"}
-            ]
-        },
-        {
-            "type": "step.gh_deployment_create",
-            "plugin": "workflow-plugin-github",
-            "description": "Creates a GitHub deployment.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner", "required": true},
-                {"key": "repo", "type": "string", "description": "GitHub repository name", "required": true},
-                {"key": "ref", "type": "string", "description": "Branch, tag, or SHA to deploy", "defaultValue": "main"},
-                {"key": "environment", "type": "string", "description": "Target deployment environment", "defaultValue": "production"},
-                {"key": "description", "type": "string", "description": "Deployment description"},
-                {"key": "auto_merge", "type": "boolean", "description": "Auto-merge the default branch before deploying", "defaultValue": false},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "deployment_id", "type": "number", "description": "Deployment ID"},
-                {"key": "environment", "type": "string", "description": "Target environment"},
-                {"key": "ref", "type": "string", "description": "Ref that was deployed"},
-                {"key": "sha", "type": "string", "description": "Commit SHA"},
-                {"key": "url", "type": "string", "description": "Deployment URL"}
-            ]
-        },
-        {
-            "type": "step.gh_secret_set",
-            "plugin": "workflow-plugin-github",
-            "description": "Creates or updates a repository secret, encrypting the value with the repo's public key.",
-            "configFields": [
-                {"key": "owner", "type": "string", "description": "GitHub repository owner or organisation name", "required": true},
-                {"key": "repo", "type": "string", "description": "Repository name", "required": true},
-                {"key": "name", "type": "string", "description": "Secret name", "required": true},
-                {"key": "value", "type": "string", "description": "Secret value (supports env var references)", "sensitive": true},
-                {"key": "token", "type": "string", "description": "GitHub personal access token with repo secrets permission", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "name", "type": "string", "description": "Secret name"},
-                {"key": "owner", "type": "string", "description": "Repository owner"},
-                {"key": "repo", "type": "string", "description": "Repository name"},
-                {"key": "set", "type": "boolean", "description": "Whether the secret was set successfully"}
-            ]
-        },
-        {
-            "type": "step.gh_graphql",
-            "plugin": "workflow-plugin-github",
-            "description": "Executes an arbitrary GraphQL query against the GitHub API.",
-            "configFields": [
-                {"key": "query", "type": "string", "description": "GraphQL query string", "required": true},
-                {"key": "variables", "type": "map", "description": "GraphQL query variables"},
-                {"key": "token", "type": "string", "description": "GitHub personal access token", "required": true, "sensitive": true}
-            ],
-            "outputs": [
-                {"key": "data", "type": "map", "description": "GraphQL response data object"},
-                {"key": "status", "type": "number", "description": "HTTP status code from the GraphQL endpoint"}
-            ]
+          "key": "timeout",
+          "type": "duration",
+          "description": "Maximum time to wait when wait=true",
+          "defaultValue": "30m"
         }
-    ]
+      ],
+      "outputs": [
+        {
+          "key": "run_id",
+          "type": "number",
+          "description": "Workflow run ID"
+        },
+        {
+          "key": "status",
+          "type": "string",
+          "description": "Run status (e.g. queued, in_progress, completed)"
+        },
+        {
+          "key": "conclusion",
+          "type": "string",
+          "description": "Run conclusion (e.g. success, failure, cancelled)"
+        },
+        {
+          "key": "url",
+          "type": "string",
+          "description": "URL to the workflow run"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_compute_gateway",
+      "plugin": "workflow-plugin-github",
+      "description": "Submits a GitHub-origin workload to workflow-compute's protected GitHub gateway and waits for proof-backed completion.",
+      "configFields": [
+        {
+          "key": "server_url",
+          "type": "string",
+          "description": "workflow-compute control plane URL",
+          "required": true
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "workflow-compute credential with github gateway scopes",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "key": "repository",
+          "type": "string",
+          "description": "GitHub repository in owner/name form",
+          "required": true
+        },
+        {
+          "key": "oidc_token",
+          "type": "string",
+          "description": "GitHub Actions OIDC token proving workflow job provenance",
+          "required": true,
+          "sensitive": true
+        },
+        {
+          "key": "workflow_run_id",
+          "type": "string",
+          "description": "Workflow run ID (numeric literal or template expression)",
+          "required": true
+        },
+        {
+          "key": "workflow_run_attempt",
+          "type": "string",
+          "description": "Workflow run attempt (numeric literal or template expression)"
+        },
+        {
+          "key": "workflow_job_id",
+          "type": "string",
+          "description": "Workflow job ID (numeric literal or template expression)",
+          "required": true
+        },
+        {
+          "key": "workflow_job_name",
+          "type": "string",
+          "description": "Workflow job name",
+          "required": true
+        },
+        {
+          "key": "ref",
+          "type": "string",
+          "description": "Git ref associated with the workload"
+        },
+        {
+          "key": "sha",
+          "type": "string",
+          "description": "Commit SHA associated with the workload"
+        },
+        {
+          "key": "org_id",
+          "type": "string",
+          "description": "workflow-compute organization ID",
+          "required": true
+        },
+        {
+          "key": "pool_id",
+          "type": "string",
+          "description": "workflow-compute pool ID",
+          "required": true
+        },
+        {
+          "key": "policy_id",
+          "type": "string",
+          "description": "workflow-compute policy ID",
+          "required": true
+        },
+        {
+          "key": "command_args",
+          "type": "array",
+          "description": "Command argv to execute inside the protected compute provider",
+          "required": true
+        },
+        {
+          "key": "working_directory",
+          "type": "string",
+          "description": "Optional working directory for command workloads"
+        },
+        {
+          "key": "artifact_allowlist",
+          "type": "array",
+          "description": "Output artifact paths the agent may return"
+        },
+        {
+          "key": "labels",
+          "type": "map",
+          "description": "Additional non-github workload labels"
+        },
+        {
+          "key": "executor_provider",
+          "type": "string",
+          "description": "Optional executor provider selector"
+        },
+        {
+          "key": "execution_security_tier",
+          "type": "string",
+          "description": "Protected execution tier",
+          "defaultValue": "sandboxed-container"
+        },
+        {
+          "key": "proof_tier",
+          "type": "string",
+          "description": "Proof tier required for success",
+          "defaultValue": "artifact-hash"
+        },
+        {
+          "key": "hardware_class",
+          "type": "string",
+          "description": "Optional hardware security class selector"
+        },
+        {
+          "key": "wait",
+          "type": "boolean",
+          "description": "Poll workflow-compute until proof-backed completion; must be true for this provider",
+          "required": true,
+          "defaultValue": true
+        },
+        {
+          "key": "poll_interval",
+          "type": "duration",
+          "description": "Interval between status polls when wait=true",
+          "defaultValue": "10s"
+        },
+        {
+          "key": "timeout",
+          "type": "duration",
+          "description": "Maximum time to wait when wait=true",
+          "defaultValue": "30m"
+        },
+        {
+          "key": "write_check",
+          "type": "boolean",
+          "description": "Create a GitHub Check Run when the compute workload reaches a terminal status",
+          "defaultValue": false
+        },
+        {
+          "key": "check_owner",
+          "type": "string",
+          "description": "Owner for the GitHub Check Run target"
+        },
+        {
+          "key": "check_repo",
+          "type": "string",
+          "description": "Repository for the GitHub Check Run target"
+        },
+        {
+          "key": "check_sha",
+          "type": "string",
+          "description": "Commit SHA for the GitHub Check Run target"
+        },
+        {
+          "key": "check_name",
+          "type": "string",
+          "description": "GitHub Check Run name"
+        },
+        {
+          "key": "check_token",
+          "type": "string",
+          "description": "GitHub token for creating the Check Run",
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "task_id",
+          "type": "string",
+          "description": "workflow-compute task ID"
+        },
+        {
+          "key": "status",
+          "type": "string",
+          "description": "workflow-compute task status"
+        },
+        {
+          "key": "conclusion",
+          "type": "string",
+          "description": "Proof-backed conclusion"
+        },
+        {
+          "key": "proof_id",
+          "type": "string",
+          "description": "Accepted proof receipt ID"
+        },
+        {
+          "key": "artifact_hash",
+          "type": "string",
+          "description": "Returned artifact hash"
+        },
+        {
+          "key": "contribution_id",
+          "type": "string",
+          "description": "Contribution ledger event ID"
+        },
+        {
+          "key": "worker_id",
+          "type": "string",
+          "description": "Worker that completed the accepted proof"
+        },
+        {
+          "key": "check_run_id",
+          "type": "number",
+          "description": "GitHub Check Run ID when write_check=true"
+        },
+        {
+          "key": "check_url",
+          "type": "string",
+          "description": "GitHub Check Run URL when write_check=true"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_create_check",
+      "plugin": "workflow-plugin-github",
+      "description": "Creates a GitHub Check Run (status check) on a specific commit.",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
+        },
+        {
+          "key": "sha",
+          "type": "string",
+          "description": "Commit SHA to associate the check with",
+          "required": true
+        },
+        {
+          "key": "name",
+          "type": "string",
+          "description": "Name of the check run",
+          "required": true
+        },
+        {
+          "key": "status",
+          "type": "select",
+          "description": "Check run status",
+          "options": [
+            "queued",
+            "in_progress",
+            "completed"
+          ],
+          "defaultValue": "queued"
+        },
+        {
+          "key": "conclusion",
+          "type": "select",
+          "description": "Check run conclusion (required when status=completed)",
+          "options": [
+            "success",
+            "failure",
+            "neutral",
+            "cancelled",
+            "skipped",
+            "timed_out",
+            "action_required"
+          ]
+        },
+        {
+          "key": "title",
+          "type": "string",
+          "description": "Check output title"
+        },
+        {
+          "key": "summary",
+          "type": "string",
+          "description": "Check output summary"
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "check_run_id",
+          "type": "number",
+          "description": "Check run ID"
+        },
+        {
+          "key": "status",
+          "type": "string",
+          "description": "Check run status"
+        },
+        {
+          "key": "url",
+          "type": "string",
+          "description": "URL to the check run"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_pr_create",
+      "plugin": "workflow-plugin-github",
+      "description": "Creates a pull request in a GitHub repository.",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
+        },
+        {
+          "key": "head",
+          "type": "string",
+          "description": "Source branch name",
+          "required": true
+        },
+        {
+          "key": "base",
+          "type": "string",
+          "description": "Target branch name",
+          "defaultValue": "main"
+        },
+        {
+          "key": "title",
+          "type": "string",
+          "description": "Pull request title"
+        },
+        {
+          "key": "body",
+          "type": "string",
+          "description": "Pull request description"
+        },
+        {
+          "key": "draft",
+          "type": "boolean",
+          "description": "Whether to create as a draft PR",
+          "defaultValue": false
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "number",
+          "type": "number",
+          "description": "Pull request number"
+        },
+        {
+          "key": "url",
+          "type": "string",
+          "description": "Pull request URL"
+        },
+        {
+          "key": "id",
+          "type": "number",
+          "description": "Pull request ID"
+        },
+        {
+          "key": "state",
+          "type": "string",
+          "description": "Pull request state (open/closed)"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_pr_merge",
+      "plugin": "workflow-plugin-github",
+      "description": "Merges a pull request in a GitHub repository.",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
+        },
+        {
+          "key": "pr_number",
+          "type": "number",
+          "description": "Pull request number to merge",
+          "required": true
+        },
+        {
+          "key": "commit_title",
+          "type": "string",
+          "description": "Merge commit title"
+        },
+        {
+          "key": "method",
+          "type": "string",
+          "description": "Merge method: merge, squash, or rebase (also accepts template expressions)",
+          "defaultValue": "merge"
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "merged",
+          "type": "boolean",
+          "description": "Whether the merge succeeded"
+        },
+        {
+          "key": "message",
+          "type": "string",
+          "description": "Result message from GitHub"
+        },
+        {
+          "key": "sha",
+          "type": "string",
+          "description": "Merge commit SHA"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_pr_comment",
+      "plugin": "workflow-plugin-github",
+      "description": "Adds a comment to a GitHub pull request.",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
+        },
+        {
+          "key": "pr_number",
+          "type": "number",
+          "description": "Pull request number",
+          "required": true
+        },
+        {
+          "key": "body",
+          "type": "string",
+          "description": "Comment text"
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "comment_id",
+          "type": "number",
+          "description": "Comment ID"
+        },
+        {
+          "key": "url",
+          "type": "string",
+          "description": "Comment URL"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_pr_review",
+      "plugin": "workflow-plugin-github",
+      "description": "Submits a review on a GitHub pull request (approve, request changes, or comment).",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
+        },
+        {
+          "key": "pr_number",
+          "type": "number",
+          "description": "Pull request number",
+          "required": true
+        },
+        {
+          "key": "event",
+          "type": "string",
+          "description": "Review event type: APPROVE, REQUEST_CHANGES, or COMMENT (also accepts template expressions)",
+          "defaultValue": "COMMENT"
+        },
+        {
+          "key": "body",
+          "type": "string",
+          "description": "Review body text"
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "review_id",
+          "type": "number",
+          "description": "Review ID"
+        },
+        {
+          "key": "state",
+          "type": "string",
+          "description": "Review state"
+        },
+        {
+          "key": "url",
+          "type": "string",
+          "description": "Review URL"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_issue_create",
+      "plugin": "workflow-plugin-github",
+      "description": "Creates a GitHub issue.",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
+        },
+        {
+          "key": "title",
+          "type": "string",
+          "description": "Issue title"
+        },
+        {
+          "key": "body",
+          "type": "string",
+          "description": "Issue body"
+        },
+        {
+          "key": "labels",
+          "type": "array",
+          "description": "Labels to attach to the issue"
+        },
+        {
+          "key": "assignees",
+          "type": "array",
+          "description": "GitHub usernames to assign to the issue"
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "number",
+          "type": "number",
+          "description": "Issue number"
+        },
+        {
+          "key": "url",
+          "type": "string",
+          "description": "Issue URL"
+        },
+        {
+          "key": "id",
+          "type": "number",
+          "description": "Issue ID"
+        },
+        {
+          "key": "state",
+          "type": "string",
+          "description": "Issue state (open)"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_issue_close",
+      "plugin": "workflow-plugin-github",
+      "description": "Closes a GitHub issue, optionally adding a comment before closing.",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
+        },
+        {
+          "key": "issue_number",
+          "type": "number",
+          "description": "Issue number to close",
+          "required": true
+        },
+        {
+          "key": "comment",
+          "type": "string",
+          "description": "Optional closing comment"
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "number",
+          "type": "number",
+          "description": "Issue number"
+        },
+        {
+          "key": "state",
+          "type": "string",
+          "description": "Issue state (closed)"
+        },
+        {
+          "key": "url",
+          "type": "string",
+          "description": "Issue URL"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_issue_label",
+      "plugin": "workflow-plugin-github",
+      "description": "Adds or removes labels on a GitHub issue or pull request.",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
+        },
+        {
+          "key": "issue_number",
+          "type": "number",
+          "description": "Issue or pull request number",
+          "required": true
+        },
+        {
+          "key": "add",
+          "type": "array",
+          "description": "Labels to add"
+        },
+        {
+          "key": "remove",
+          "type": "array",
+          "description": "Labels to remove"
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "added",
+          "type": "array",
+          "description": "Labels that were added"
+        },
+        {
+          "key": "removed",
+          "type": "array",
+          "description": "Labels that were removed"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_release_create",
+      "plugin": "workflow-plugin-github",
+      "description": "Creates a GitHub release.",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
+        },
+        {
+          "key": "tag",
+          "type": "string",
+          "description": "Git tag name for the release",
+          "required": true
+        },
+        {
+          "key": "name",
+          "type": "string",
+          "description": "Release display name"
+        },
+        {
+          "key": "body",
+          "type": "string",
+          "description": "Release notes / changelog"
+        },
+        {
+          "key": "draft",
+          "type": "boolean",
+          "description": "Whether to create as a draft release",
+          "defaultValue": false
+        },
+        {
+          "key": "prerelease",
+          "type": "boolean",
+          "description": "Whether this is a pre-release",
+          "defaultValue": false
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "release_id",
+          "type": "number",
+          "description": "Release ID"
+        },
+        {
+          "key": "url",
+          "type": "string",
+          "description": "Release URL"
+        },
+        {
+          "key": "upload_url",
+          "type": "string",
+          "description": "Asset upload URL"
+        },
+        {
+          "key": "tag",
+          "type": "string",
+          "description": "Tag name"
+        },
+        {
+          "key": "draft",
+          "type": "boolean",
+          "description": "Whether the release is a draft"
+        },
+        {
+          "key": "prerelease",
+          "type": "boolean",
+          "description": "Whether the release is a pre-release"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_release_upload",
+      "plugin": "workflow-plugin-github",
+      "description": "Uploads a file asset to an existing GitHub release.",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
+        },
+        {
+          "key": "release_id",
+          "type": "string",
+          "description": "Release ID (numeric literal or template expression e.g. {{.steps.create_release.release_id}})",
+          "required": true
+        },
+        {
+          "key": "file",
+          "type": "filepath",
+          "description": "Local path to the file to upload",
+          "required": true
+        },
+        {
+          "key": "name",
+          "type": "string",
+          "description": "Display name for the release asset"
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "asset_id",
+          "type": "number",
+          "description": "Asset ID"
+        },
+        {
+          "key": "url",
+          "type": "string",
+          "description": "Asset download URL"
+        },
+        {
+          "key": "name",
+          "type": "string",
+          "description": "Asset name"
+        },
+        {
+          "key": "size",
+          "type": "number",
+          "description": "Asset file size in bytes"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_repo_dispatch",
+      "plugin": "workflow-plugin-github",
+      "description": "Sends a repository_dispatch event to trigger external GitHub Actions workflows.",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
+        },
+        {
+          "key": "event_type",
+          "type": "string",
+          "description": "Custom event type name",
+          "required": true
+        },
+        {
+          "key": "payload",
+          "type": "map",
+          "description": "Client payload data to include with the event"
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "dispatched",
+          "type": "boolean",
+          "description": "Whether the event was dispatched"
+        },
+        {
+          "key": "event_type",
+          "type": "string",
+          "description": "Event type that was dispatched"
+        },
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "Repository owner"
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "Repository name"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_deployment_create",
+      "plugin": "workflow-plugin-github",
+      "description": "Creates a GitHub deployment.",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "GitHub repository name",
+          "required": true
+        },
+        {
+          "key": "ref",
+          "type": "string",
+          "description": "Branch, tag, or SHA to deploy",
+          "defaultValue": "main"
+        },
+        {
+          "key": "environment",
+          "type": "string",
+          "description": "Target deployment environment",
+          "defaultValue": "production"
+        },
+        {
+          "key": "description",
+          "type": "string",
+          "description": "Deployment description"
+        },
+        {
+          "key": "auto_merge",
+          "type": "boolean",
+          "description": "Auto-merge the default branch before deploying",
+          "defaultValue": false
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "deployment_id",
+          "type": "number",
+          "description": "Deployment ID"
+        },
+        {
+          "key": "environment",
+          "type": "string",
+          "description": "Target environment"
+        },
+        {
+          "key": "ref",
+          "type": "string",
+          "description": "Ref that was deployed"
+        },
+        {
+          "key": "sha",
+          "type": "string",
+          "description": "Commit SHA"
+        },
+        {
+          "key": "url",
+          "type": "string",
+          "description": "Deployment URL"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_secret_set",
+      "plugin": "workflow-plugin-github",
+      "description": "Creates or updates a repository secret, encrypting the value with the repo's public key.",
+      "configFields": [
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "GitHub repository owner or organisation name",
+          "required": true
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "Repository name",
+          "required": true
+        },
+        {
+          "key": "name",
+          "type": "string",
+          "description": "Secret name",
+          "required": true
+        },
+        {
+          "key": "value",
+          "type": "string",
+          "description": "Secret value (supports env var references)",
+          "sensitive": true
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token with repo secrets permission",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "name",
+          "type": "string",
+          "description": "Secret name"
+        },
+        {
+          "key": "owner",
+          "type": "string",
+          "description": "Repository owner"
+        },
+        {
+          "key": "repo",
+          "type": "string",
+          "description": "Repository name"
+        },
+        {
+          "key": "set",
+          "type": "boolean",
+          "description": "Whether the secret was set successfully"
+        }
+      ]
+    },
+    {
+      "type": "step.gh_graphql",
+      "plugin": "workflow-plugin-github",
+      "description": "Executes an arbitrary GraphQL query against the GitHub API.",
+      "configFields": [
+        {
+          "key": "query",
+          "type": "string",
+          "description": "GraphQL query string",
+          "required": true
+        },
+        {
+          "key": "variables",
+          "type": "map",
+          "description": "GraphQL query variables"
+        },
+        {
+          "key": "token",
+          "type": "string",
+          "description": "GitHub personal access token",
+          "required": true,
+          "sensitive": true
+        }
+      ],
+      "outputs": [
+        {
+          "key": "data",
+          "type": "map",
+          "description": "GraphQL response data object"
+        },
+        {
+          "key": "status",
+          "type": "number",
+          "description": "HTTP status code from the GraphQL endpoint"
+        }
+      ]
+    }
+  ]
 }
