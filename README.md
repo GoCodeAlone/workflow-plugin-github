@@ -1,5 +1,7 @@
 # workflow-plugin-github
 
+> ⚠️ **Experimental** — This plugin compiles and passes its unit tests but has not been validated in any active GoCodeAlone-internal production deployment. Use with caution. Please [open an issue](https://github.com/GoCodeAlone/workflow-plugin-github/issues/new) if you adopt it so we can promote it to **verified** status.
+
 GitHub integration plugin for the [workflow engine](https://github.com/GoCodeAlone/workflow). Provides GitHub webhook handling and GitHub Actions workflow management.
 
 ## Capabilities
