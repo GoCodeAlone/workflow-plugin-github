@@ -1,0 +1,16 @@
+# Minimal config exercising workflow-plugin-github.
+# Schema-validate with: wfctl validate --skip-unknown-types examples/minimal/config.yaml
+
+version: 1
+
+modules:
+  - name: github-provider
+    type: git.webhook
+    config: {}
+
+workflows:
+  pipeline:
+    steps:
+      - name: example
+        type: step.gh_action_trigger
+        config: {}
