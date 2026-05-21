@@ -39,8 +39,10 @@ jobs:
   notify-workflow-registry:
     name: Notify workflow-registry
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: goreleaser
-    if: ${{ !contains(inputs.tag_name || github.ref_name, '-') }}
+    if: ${{ !contains(github.ref_name, '-') }}
     steps:
       - name: Trigger registry manifest sync
         uses: peter-evans/repository-dispatch@v4
