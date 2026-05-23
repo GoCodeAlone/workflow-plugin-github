@@ -1,47 +1,53 @@
 name: Release
-
 on:
   push:
     tags:
-      - "v*"
-
+      - 'v*'
 permissions:
   contents: write
-
+  id-token: write
 jobs:
-  goreleaser:
+  release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v7
+      - uses: GoCodeAlone/setup-wfctl@v1
+        with:
+          version: v0.61.0
+      - name: Validate plugin contract for publish (pre-build)
+        run: wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" .
+      - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
-          version: "~> v2"
+          version: '~> v2'
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOPRIVATE: github.com/GoCodeAlone/*
           GONOSUMCHECK: github.com/GoCodeAlone/*
-      - name: Publish GitHub release
-        if: ${{ success() }}
+      - name: Verify shipped plugin.json carries tag (post-build)
+        run: |
+          if [ -f .release/plugin.json ]; then
+            wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" --release-dir .release .
+          else
+            wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" --release-dir . .
+          fi
+      - name: Publish release (was draft during asset upload)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${{ github.ref_name }}" --draft=false --repo "${{ github.repository }}"
+        run: gh release edit ${{ github.ref_name }} --draft=false --repo ${{ github.repository }}
 
   notify-workflow-registry:
     name: Notify workflow-registry
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    needs: goreleaser
+    needs: release
     if: >-
       !github.event.deleted
       && !contains(github.ref_name, '-')
