@@ -10,5 +10,7 @@ import (
 )
 
 func main() {
-	sdk.Serve(internal.NewGitHubPlugin())
+	sdk.Serve(internal.NewGitHubPlugin(),
+		sdk.WithBuildVersion(sdk.ResolveBuildVersion(internal.Version)),
+	)
 }

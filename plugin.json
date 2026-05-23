@@ -1,12 +1,12 @@
 {
     "name": "workflow-plugin-github",
-    "version": "1.0.3",
+    "version": "0.0.0",
     "description": "GitHub integration plugin: webhook handling, GitHub Actions, PRs, issues, releases, and deployments",
     "author": "GoCodeAlone",
     "license": "MIT",
     "type": "external",
     "tier": "community",
-    "minEngineVersion": "0.53.0",
+    "minEngineVersion": "0.61.0",
     "keywords": ["github", "webhook", "git", "actions", "ci", "cd", "integration", "pull-request", "release"],
     "homepage": "https://github.com/GoCodeAlone/workflow-plugin-github",
     "repository": "https://github.com/GoCodeAlone/workflow-plugin-github",
@@ -58,6 +58,30 @@
         "step.gh_graphql"
     ],
     "triggerTypes": [],
+    "capabilities": {
+        "configProvider": false,
+        "moduleTypes": ["git.webhook", "github.app", "github.runner_provider"],
+        "stepTypes": [
+            "step.gh_action_trigger",
+            "step.gh_action_status",
+            "step.gh_compute_gateway",
+            "step.gh_create_check",
+            "step.gh_pr_create",
+            "step.gh_pr_merge",
+            "step.gh_pr_comment",
+            "step.gh_pr_review",
+            "step.gh_issue_create",
+            "step.gh_issue_close",
+            "step.gh_issue_label",
+            "step.gh_release_create",
+            "step.gh_release_upload",
+            "step.gh_repo_dispatch",
+            "step.gh_deployment_create",
+            "step.gh_secret_set",
+            "step.gh_graphql"
+        ],
+        "triggerTypes": []
+    },
     "contracts": [
         {
             "kind": "module",
