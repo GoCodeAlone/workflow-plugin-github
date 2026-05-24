@@ -8,7 +8,7 @@ import (
 
 // Version is set at build time via -ldflags
 // "-X github.com/GoCodeAlone/workflow-plugin-github/internal.Version=X.Y.Z"
-var Version = "dev"
+var Version = "0.0.0"
 
 // webhookRouteConfig is the config fragment YAML that declares the GitHub
 // webhook HTTP route so the engine's HTTP server registers it via the normal
