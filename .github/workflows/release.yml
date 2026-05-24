@@ -18,7 +18,7 @@ jobs:
           go-version-file: go.mod
       - uses: GoCodeAlone/setup-wfctl@v1
         with:
-          version: v0.61.0
+          version: v0.63.2
       - name: Validate plugin contract for publish (pre-build)
         run: wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" .
       - uses: goreleaser/goreleaser-action@v7
@@ -42,7 +42,7 @@ jobs:
             jq '.[] | {name, type, goos, goarch, path}' dist/artifacts.json
             exit 0
           fi
-          "${{ runner.temp }}/wfctl-bin/wfctl" plugin verify-capabilities --binary "$BIN" .
+          wfctl plugin verify-capabilities --binary "$BIN" .
       - name: Verify shipped plugin.json carries tag (post-build)
         run: |
           if [ -f .release/plugin.json ]; then
