@@ -3,7 +3,7 @@ module github.com/GoCodeAlone/workflow-plugin-github
 go 1.26.0
 
 require (
-	github.com/GoCodeAlone/workflow v0.61.0
+	github.com/GoCodeAlone/workflow v0.64.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-github/v69 v69.2.0
 	golang.org/x/crypto v0.51.0
