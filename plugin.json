@@ -7,6 +7,14 @@
     "type": "external",
     "tier": "community",
     "minEngineVersion": "0.61.0",
+    "required_secrets": [
+        {
+            "name": "GITHUB_APP_PRIVATE_KEY",
+            "sensitive": true,
+            "description": "GitHub App private key (PEM) for the github.app module. Referenced as ${GITHUB_APP_PRIVATE_KEY} in private_key. (Step-level operations may also use a GITHUB_TOKEN.)",
+            "prompt": "GitHub App private key (PEM)"
+        }
+    ],
     "keywords": ["github", "webhook", "git", "actions", "ci", "cd", "integration", "pull-request", "release"],
     "homepage": "https://github.com/GoCodeAlone/workflow-plugin-github",
     "repository": "https://github.com/GoCodeAlone/workflow-plugin-github",
