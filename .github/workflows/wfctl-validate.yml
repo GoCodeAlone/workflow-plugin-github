@@ -12,7 +12,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
       - name: Check plugin.json and plugin.contracts.json exist
         run: |
@@ -25,10 +25,24 @@ jobs:
             exit 1
           fi
 
-      - uses: GoCodeAlone/setup-wfctl@bcd880980f5bbe8d192d0c20ff6279d25331f956
-        with:
-          version: latest
-          token: ${{ secrets.RELEASES_TOKEN }}
+      - name: Install wfctl v0.74.6
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN || github.token }}
+          WFCTL_VERSION: v0.74.6
+        run: |
+          set -euo pipefail
+          runner_arch=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+          asset="wfctl-linux-${runner_arch}"
+          download_dir="$(mktemp -d)"
+          gh release download "${WFCTL_VERSION}" \
+            --repo GoCodeAlone/workflow \
+            --pattern "${asset}" \
+            --pattern checksums.txt \
+            --dir "${download_dir}"
+          (cd "${download_dir}" && grep "  ${asset}$" checksums.txt | sha256sum -c -)
+          mkdir -p "${RUNNER_TEMP}/wfctl-bin"
+          install -m 0755 "${download_dir}/${asset}" "${RUNNER_TEMP}/wfctl-bin/wfctl"
+          echo "${RUNNER_TEMP}/wfctl-bin" >> "$GITHUB_PATH"
 
       - name: Validate strict plugin contracts
         run: wfctl plugin validate --file plugin.json --strict-contracts
