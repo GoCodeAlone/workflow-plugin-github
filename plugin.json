@@ -607,15 +607,14 @@
           ],
           "description": "Stored as GitHub Actions secrets when workflows run on GitHub."
         },
-        {
-          "provider": "gitlab",
-          "scopes": [
-            "project",
-            "group",
-            "env"
-          ],
-          "description": "Stored as GitLab CI/CD variables when workflows run on GitLab."
-        },
+      {
+        "provider": "gitlab",
+        "scopes": [
+          "project",
+          "group"
+        ],
+        "description": "Stored as GitLab CI/CD variables when workflows run on GitLab; variables may also be narrowed with GitLab environment_scope."
+      },
         {
           "provider": "vault",
           "scopes": [
