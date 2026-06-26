@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -91,6 +92,34 @@ func TestT593_GitHubRunnerClientPreflightChecksPaginatedOrgRunnerLabels(t *testi
 	}
 	if len(result.ConflictingLabels) != 1 || result.ConflictingLabels[0] != "wfc-ghp-stg" {
 		t.Fatalf("conflicting labels: got %+v", result.ConflictingLabels)
+	}
+}
+
+func TestT915_GitHubRunnerClientDispatchesWorkflow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method: got %q want POST", r.Method)
+		}
+		if r.URL.Path != "/repos/GoCodeAlone/workflow-compute/actions/workflows/dogfood.yml/dispatches" {
+			t.Fatalf("path: got %q", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer github-token" {
+			t.Fatalf("authorization header: got %q", r.Header.Get("Authorization"))
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		if body["ref"] != "main" {
+			t.Fatalf("body: %+v", body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	client := &httpGitHubRunnerClient{baseURL: server.URL, httpClient: server.Client()}
+	if err := client.DispatchWorkflow(context.Background(), "GoCodeAlone", "workflow-compute", "dogfood.yml", "main", "github-token"); err != nil {
+		t.Fatalf("dispatch workflow: %v", err)
 	}
 }
 
@@ -254,6 +283,38 @@ func TestT41_GitHubRunnerProviderHTTPRejectsUnallowlistedRepository(t *testing.T
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("status: got %d want 403", resp.StatusCode)
+	}
+}
+
+func TestT915_GitHubRunnerProviderHTTPDispatchesWorkflow(t *testing.T) {
+	fake := &fakeRunnerClient{}
+	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
+		"token":          "github-token",
+		"provider_token": "provider-token",
+		"repositories":   []any{"GoCodeAlone/workflow-compute"},
+	}, fake)
+	if err != nil {
+		t.Fatalf("module: %v", err)
+	}
+	server := httptest.NewServer(module.HTTPHandler())
+	defer server.Close()
+
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/dispatches", strings.NewReader(`{"ref":"main"}`))
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer provider-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("provider request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("status: got %d body=%s", resp.StatusCode, readResponseBody(t, resp))
+	}
+	if fake.dispatchedRepository != "GoCodeAlone/workflow-compute" || fake.dispatchedWorkflow != "dogfood.yml" || fake.dispatchedRef != "main" {
+		t.Fatalf("dispatch: repo=%q workflow=%q ref=%q", fake.dispatchedRepository, fake.dispatchedWorkflow, fake.dispatchedRef)
 	}
 }
 
@@ -459,6 +520,9 @@ type fakeRunnerClient struct {
 	removedRunnerID             int64
 	preflight                   GitHubRunnerProviderPreflight
 	preflightOrganization       string
+	dispatchedRepository        string
+	dispatchedWorkflow          string
+	dispatchedRef               string
 }
 
 func (f *fakeRunnerClient) RegistrationToken(_ context.Context, owner, repo, _ string) (GitHubRunnerRegistrationToken, error) {
@@ -488,6 +552,13 @@ func (f *fakeRunnerClient) PreflightOrg(_ context.Context, req GitHubRunnerProvi
 	return f.preflight, nil
 }
 
+func (f *fakeRunnerClient) DispatchWorkflow(_ context.Context, owner, repo, workflow, ref, _ string) error {
+	f.dispatchedRepository = owner + "/" + repo
+	f.dispatchedWorkflow = workflow
+	f.dispatchedRef = ref
+	return nil
+}
+
 func writeRunnerProviderJSON(t *testing.T, w http.ResponseWriter, status int, v any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
@@ -495,4 +566,13 @@ func writeRunnerProviderJSON(t *testing.T, w http.ResponseWriter, status int, v 
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		t.Fatalf("encode response: %v", err)
 	}
+}
+
+func readResponseBody(t *testing.T, resp *http.Response) string {
+	t.Helper()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	return string(data)
 }

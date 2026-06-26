@@ -32,6 +32,7 @@ type GitHubRunnerClient interface {
 	OrgRegistrationToken(ctx context.Context, organization, token string) (GitHubRunnerRegistrationToken, error)
 	RemoveOrgRunner(ctx context.Context, organization string, runnerID int64, token string) error
 	PreflightOrg(ctx context.Context, req GitHubRunnerProviderPreflightRequest, token string) (GitHubRunnerProviderPreflight, error)
+	DispatchWorkflow(ctx context.Context, owner, repo, workflow, ref, token string) error
 }
 
 type GitHubRunnerRegistrationToken struct {
@@ -169,6 +170,14 @@ func (c *httpGitHubRunnerClient) PreflightOrg(ctx context.Context, req GitHubRun
 		ActionsEnabled:     true,
 		SelfHostedAllowed:  true,
 	}, nil
+}
+
+func (c *httpGitHubRunnerClient) DispatchWorkflow(ctx context.Context, owner, repo, workflow, ref, token string) error {
+	if strings.TrimSpace(ref) == "" {
+		ref = "main"
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/workflows/%s/dispatches", c.baseURL, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(workflow))
+	return c.do(ctx, http.MethodPost, endpoint, map[string]any{"ref": ref}, token, http.StatusNoContent, nil)
 }
 
 func (c *httpGitHubRunnerClient) do(ctx context.Context, method, endpoint string, body any, token string, wantStatus int, out any) error {
@@ -405,6 +414,23 @@ func (m *githubRunnerProviderModule) invokeMethod(ctx context.Context, method st
 			return nil, err
 		}
 		return preflightMap(preflight), nil
+	case "dispatch_workflow":
+		owner, repo, repository, err := repositoryArg(args)
+		if err != nil {
+			return nil, err
+		}
+		if err := m.requireAllowedRepository(repository); err != nil {
+			return nil, err
+		}
+		workflow := stringArg(args, "workflow")
+		if workflow == "" {
+			return nil, errors.New("workflow is required")
+		}
+		ref := stringArg(args, "ref")
+		if err := m.client.DispatchWorkflow(ctx, owner, repo, workflow, ref, m.config.Token); err != nil {
+			return nil, err
+		}
+		return map[string]any{}, nil
 	case "ephemeral_runner_job":
 		req, err := ephemeralRunnerJobRequestFromArgs(args)
 		if err != nil {
@@ -435,6 +461,7 @@ func (m *githubRunnerProviderModule) HTTPHandler() http.Handler {
 	mux.HandleFunc("POST /v1/actions/orgs/{organization}/runners/registration-token", m.handleOrgRegistrationToken)
 	mux.HandleFunc("DELETE /v1/actions/orgs/{organization}/runners/{runner_id}", m.handleRemoveOrgRunner)
 	mux.HandleFunc("POST /v1/actions/orgs/{organization}/runners/preflight", m.handleOrgPreflight)
+	mux.HandleFunc("POST /v1/actions/repos/{owner}/{repo}/workflows/{workflow}/dispatches", m.handleDispatchWorkflow)
 	return mux
 }
 
@@ -533,6 +560,29 @@ func (m *githubRunnerProviderModule) handleOrgPreflight(w http.ResponseWriter, r
 		return
 	}
 	writeProviderResponse(w, http.StatusOK, out)
+}
+
+func (m *githubRunnerProviderModule) handleDispatchWorkflow(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Ref string `json:"ref"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeProviderError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
+		return
+	}
+	out, err := m.invokeMethod(r.Context(), "dispatch_workflow", map[string]any{
+		"repository":     r.PathValue("owner") + "/" + r.PathValue("repo"),
+		"workflow":       r.PathValue("workflow"),
+		"ref":            req.Ref,
+		"provider_token": bearerToken(r),
+	})
+	if err != nil {
+		writeProviderError(w, providerErrorStatus(err), err)
+		return
+	}
+	writeProviderResponse(w, http.StatusNoContent, out)
 }
 
 func bearerToken(r *http.Request) string {
