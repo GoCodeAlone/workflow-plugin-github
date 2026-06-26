@@ -580,7 +580,7 @@ func (m *githubRunnerProviderModule) requireAllowedRepository(repository string)
 
 func (m *githubRunnerProviderModule) requireAllowedOrganization(organization string) error {
 	if len(m.config.Organizations) == 0 {
-		return nil
+		return fmt.Errorf("%w: config.organizations is required for organization-scoped runner operations", errOrganizationNotAllowlisted)
 	}
 	if _, ok := m.config.Organizations[canonicalOrganization(organization)]; !ok {
 		return fmt.Errorf("%w: %s", errOrganizationNotAllowlisted, organization)

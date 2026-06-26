@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -280,6 +281,25 @@ func TestT593_GitHubRunnerProviderModuleInvokesOrgRegistrationToken(t *testing.T
 	}
 	if fake.orgRegistrationOrganization != "GoCodeAlone" {
 		t.Fatalf("organization: got %q", fake.orgRegistrationOrganization)
+	}
+}
+
+func TestT593_GitHubRunnerProviderModuleRejectsOrgRegistrationWithoutOrgAllowlist(t *testing.T) {
+	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
+		"token":          "github-token",
+		"provider_token": "provider-token",
+		"repositories":   []any{"GoCodeAlone/workflow-compute"},
+	}, &fakeRunnerClient{token: GitHubRunnerRegistrationToken{Token: "runner-token", ExpiresAt: time.Now().UTC().Add(time.Hour)}})
+	if err != nil {
+		t.Fatalf("module: %v", err)
+	}
+
+	_, err = module.InvokeMethod("org_registration_token", map[string]any{
+		"organization":   "GoCodeAlone",
+		"provider_token": "provider-token",
+	})
+	if !errors.Is(err, errOrganizationNotAllowlisted) {
+		t.Fatalf("org_registration_token err: got %v want %v", err, errOrganizationNotAllowlisted)
 	}
 }
 
