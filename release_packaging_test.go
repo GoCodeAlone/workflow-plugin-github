@@ -52,6 +52,33 @@ func TestReleaseArchiveIncludesGitHubActionsRunnerJob(t *testing.T) {
 	}
 }
 
+func TestReleasePublishesGitHubActionsRunnerJobImage(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatalf("read release workflow: %v", err)
+	}
+	workflow := string(data)
+
+	for _, want := range []string{
+		"packages: write",
+		"GOOS=linux GOARCH=amd64 go build -o dist/github-actions-runner-job-linux-amd64 ./cmd/github-actions-runner-job",
+		"GOOS=linux GOARCH=arm64 go build -o dist/github-actions-runner-job-linux-arm64 ./cmd/github-actions-runner-job",
+		"docker/login-action@",
+		"docker/setup-buildx-action@",
+		"docker/build-push-action@",
+		"context: .",
+		"file: cmd/github-actions-runner-job/Dockerfile",
+		"platforms: linux/amd64,linux/arm64",
+		"push: true",
+		"ghcr.io/gocodealone/workflow-plugin-github/github-actions-runner-job:${{ github.ref_name }}",
+		"ghcr.io/gocodealone/workflow-plugin-github/github-actions-runner-job:latest",
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow must include %q so the runner-job image is available to workflow-compute agents", want)
+		}
+	}
+}
+
 func TestReleaseArchiveCheckRejectsProviderBuildOutsideArchive(t *testing.T) {
 	config := `
 builds:
