@@ -29,6 +29,29 @@ func TestReleaseArchiveIncludesGitHubRunnerProvider(t *testing.T) {
 	}
 }
 
+func TestReleaseArchiveIncludesGitHubActionsRunnerJob(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	text := string(data)
+
+	if !goreleaserBuildIncludes(text, "github-actions-runner-job", []string{
+		"main: ./cmd/github-actions-runner-job",
+		"binary: github-actions-runner-job",
+	}) {
+		t.Fatal("release config must build the versioned github-actions-runner-job binary")
+	}
+
+	if !goreleaserArchiveIncludesBuild(text, "workflow-plugin-github", "github-actions-runner-job") {
+		t.Fatal("release archive must include github-actions-runner-job so workflow-compute agents receive it through provider package delivery")
+	}
+
+	if _, err := os.Stat("cmd/github-actions-runner-job/main.go"); err != nil {
+		t.Fatalf("github-actions-runner-job command must exist: %v", err)
+	}
+}
+
 func TestReleaseArchiveCheckRejectsProviderBuildOutsideArchive(t *testing.T) {
 	config := `
 builds:
