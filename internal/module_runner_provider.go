@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,15 +23,36 @@ import (
 const defaultGitHubAPIBaseURL = "https://api.github.com"
 
 var errRepositoryNotAllowlisted = errors.New("repository is not allowlisted")
+var errOrganizationNotAllowlisted = errors.New("organization is not allowlisted")
+var errRunnerGroupNotAllowlisted = errors.New("runner group is not allowlisted")
 
 type GitHubRunnerClient interface {
 	RegistrationToken(ctx context.Context, owner, repo, token string) (GitHubRunnerRegistrationToken, error)
 	RemoveRunner(ctx context.Context, owner, repo string, runnerID int64, token string) error
+	OrgRegistrationToken(ctx context.Context, organization, token string) (GitHubRunnerRegistrationToken, error)
+	RemoveOrgRunner(ctx context.Context, organization string, runnerID int64, token string) error
+	PreflightOrg(ctx context.Context, req GitHubRunnerProviderPreflightRequest, token string) (GitHubRunnerProviderPreflight, error)
 }
 
 type GitHubRunnerRegistrationToken struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
+}
+
+type GitHubRunnerProviderPreflightRequest struct {
+	Organization string
+	RunnerGroup  string
+	Labels       []string
+}
+
+type GitHubRunnerProviderPreflight struct {
+	Organization       string   `json:"organization"`
+	RunnerGroup        string   `json:"runner_group,omitempty"`
+	ExistingLabels     []string `json:"existing_labels,omitempty"`
+	ConflictingLabels  []string `json:"conflicting_labels,omitempty"`
+	RunnerCountChecked int      `json:"runner_count_checked,omitempty"`
+	ActionsEnabled     bool     `json:"actions_enabled"`
+	SelfHostedAllowed  bool     `json:"self_hosted_allowed"`
 }
 
 type httpGitHubRunnerClient struct {
@@ -70,21 +92,105 @@ func (c *httpGitHubRunnerClient) RemoveRunner(ctx context.Context, owner, repo s
 	return c.do(ctx, http.MethodDelete, endpoint, nil, token, http.StatusNoContent, nil)
 }
 
+func (c *httpGitHubRunnerClient) OrgRegistrationToken(ctx context.Context, organization, token string) (GitHubRunnerRegistrationToken, error) {
+	endpoint := fmt.Sprintf("%s/orgs/%s/actions/runners/registration-token", c.baseURL, url.PathEscape(organization))
+	var out GitHubRunnerRegistrationToken
+	if err := c.do(ctx, http.MethodPost, endpoint, nil, token, http.StatusCreated, &out); err != nil {
+		return GitHubRunnerRegistrationToken{}, err
+	}
+	if out.Token == "" {
+		return GitHubRunnerRegistrationToken{}, errors.New("github runner registration token response missing token")
+	}
+	return out, nil
+}
+
+func (c *httpGitHubRunnerClient) RemoveOrgRunner(ctx context.Context, organization string, runnerID int64, token string) error {
+	if runnerID <= 0 {
+		return errors.New("runner_id must be positive")
+	}
+	endpoint := fmt.Sprintf("%s/orgs/%s/actions/runners/%d", c.baseURL, url.PathEscape(organization), runnerID)
+	return c.do(ctx, http.MethodDelete, endpoint, nil, token, http.StatusNoContent, nil)
+}
+
+func (c *httpGitHubRunnerClient) PreflightOrg(ctx context.Context, req GitHubRunnerProviderPreflightRequest, token string) (GitHubRunnerProviderPreflight, error) {
+	endpoint := fmt.Sprintf("%s/orgs/%s/actions/runners?per_page=100", c.baseURL, url.PathEscape(req.Organization))
+	seen := map[string]string{}
+	checked := 0
+	runnerCount := 0
+	for endpoint != "" {
+		var out struct {
+			TotalCount int `json:"total_count"`
+			Runners    []struct {
+				Labels []struct {
+					Name string `json:"name"`
+				} `json:"labels"`
+			} `json:"runners"`
+		}
+		headers, err := c.doRaw(ctx, http.MethodGet, endpoint, nil, token, http.StatusOK, &out)
+		if err != nil {
+			return GitHubRunnerProviderPreflight{}, err
+		}
+		if out.TotalCount > checked {
+			checked = out.TotalCount
+		}
+		runnerCount += len(out.Runners)
+		for _, runner := range out.Runners {
+			for _, label := range runner.Labels {
+				name := strings.TrimSpace(label.Name)
+				if name == "" {
+					continue
+				}
+				seen[strings.ToLower(name)] = name
+			}
+		}
+		endpoint = githubNextLink(headers.Get("Link"))
+	}
+	if checked == 0 {
+		checked = runnerCount
+	}
+	existing := make([]string, 0, len(seen))
+	for _, name := range seen {
+		existing = append(existing, name)
+	}
+	conflicts := make([]string, 0)
+	for _, label := range req.Labels {
+		if existingName, ok := seen[strings.ToLower(strings.TrimSpace(label))]; ok {
+			conflicts = append(conflicts, existingName)
+		}
+	}
+	sort.Strings(existing)
+	sort.Strings(conflicts)
+	return GitHubRunnerProviderPreflight{
+		Organization:       req.Organization,
+		RunnerGroup:        req.RunnerGroup,
+		ExistingLabels:     existing,
+		ConflictingLabels:  conflicts,
+		RunnerCountChecked: checked,
+		ActionsEnabled:     true,
+		SelfHostedAllowed:  true,
+	}, nil
+}
+
 func (c *httpGitHubRunnerClient) do(ctx context.Context, method, endpoint string, body any, token string, wantStatus int, out any) error {
+	_, err := c.doRaw(ctx, method, endpoint, body, token, wantStatus, out)
+	return err
+}
+
+func (c *httpGitHubRunnerClient) doRaw(ctx context.Context, method, endpoint string, body any, token string, wantStatus int, out any) (http.Header, error) {
 	if strings.TrimSpace(token) == "" {
-		return errors.New("github token is required")
+		return nil, errors.New("github token is required")
 	}
 	var reader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("marshal github runner request: %w", err)
+			return nil, fmt.Errorf("marshal github runner request: %w", err)
 		}
 		reader = bytes.NewReader(data)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, endpoint, reader)
 	if err != nil {
-		return fmt.Errorf("build github runner request: %w", err)
+		return nil, fmt.Errorf("build github runner request: %w", err)
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -99,20 +205,35 @@ func (c *httpGitHubRunnerClient) do(ctx context.Context, method, endpoint string
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("github runner request failed: %w", err)
+		return nil, fmt.Errorf("github runner request failed: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != wantStatus {
 		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
-		return fmt.Errorf("github runner request returned %s: %s", resp.Status, strings.TrimSpace(string(limited)))
+		return nil, fmt.Errorf("github runner request returned %s: %s", resp.Status, strings.TrimSpace(string(limited)))
 	}
 	if out == nil {
-		return nil
+		return resp.Header, nil
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-		return fmt.Errorf("decode github runner response: %w", err)
+		return nil, fmt.Errorf("decode github runner response: %w", err)
 	}
-	return nil
+	return resp.Header, nil
+}
+
+func githubNextLink(header string) string {
+	for part := range strings.SplitSeq(header, ",") {
+		part = strings.TrimSpace(part)
+		if !strings.Contains(part, `rel="next"`) {
+			continue
+		}
+		start := strings.IndexByte(part, '<')
+		end := strings.IndexByte(part, '>')
+		if start >= 0 && end > start+1 {
+			return part[start+1 : end]
+		}
+	}
+	return ""
 }
 
 type githubRunnerProviderModule struct {
@@ -126,10 +247,12 @@ type githubRunnerProviderConfig struct {
 	ProviderToken string
 	APIBaseURL    string
 	Repositories  map[string]struct{}
+	Organizations map[string]struct{}
+	RunnerGroups  map[string]struct{}
 }
 
 func newGitHubRunnerProviderModule(name string, raw map[string]any, client GitHubRunnerClient) (*githubRunnerProviderModule, error) {
-	if err := rejectUnknownConfig(raw, "token", "provider_token", "api_base_url", "repositories"); err != nil {
+	if err := rejectUnknownConfig(raw, "token", "provider_token", "api_base_url", "repositories", "organizations", "runner_groups"); err != nil {
 		return nil, fmt.Errorf("github.runner_provider %q: %w", name, err)
 	}
 	cfg := githubRunnerProviderConfig{}
@@ -149,9 +272,24 @@ func newGitHubRunnerProviderModule(name string, raw map[string]any, client GitHu
 		return nil, fmt.Errorf("github.runner_provider %q: %w", name, err)
 	}
 	if len(repositories) == 0 {
-		return nil, fmt.Errorf("github.runner_provider %q: config.repositories requires at least one repository", name)
+		if _, ok := raw["organizations"]; !ok {
+			return nil, fmt.Errorf("github.runner_provider %q: config.repositories requires at least one repository", name)
+		}
 	}
 	cfg.Repositories = repositories
+	organizations, err := parseRunnerProviderOrganizations(raw["organizations"])
+	if err != nil {
+		return nil, fmt.Errorf("github.runner_provider %q: %w", name, err)
+	}
+	if len(repositories) == 0 && len(organizations) == 0 {
+		return nil, fmt.Errorf("github.runner_provider %q: config.repositories or config.organizations requires at least one entry", name)
+	}
+	cfg.Organizations = organizations
+	runnerGroups, err := parseRunnerProviderStringSet(raw["runner_groups"], "config.runner_groups")
+	if err != nil {
+		return nil, fmt.Errorf("github.runner_provider %q: %w", name, err)
+	}
+	cfg.RunnerGroups = runnerGroups
 	if client == nil {
 		client = newHTTPGitHubRunnerClient(cfg.APIBaseURL)
 	}
@@ -197,6 +335,22 @@ func (m *githubRunnerProviderModule) invokeMethod(ctx context.Context, method st
 			"token":      token.Token,
 			"expires_at": token.ExpiresAt.Format(time.RFC3339),
 		}, nil
+	case "org_registration_token":
+		organization, err := organizationArg(args)
+		if err != nil {
+			return nil, err
+		}
+		if err := m.requireAllowedOrganization(organization); err != nil {
+			return nil, err
+		}
+		token, err := m.client.OrgRegistrationToken(ctx, organization, m.config.Token)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"token":      token.Token,
+			"expires_at": token.ExpiresAt.Format(time.RFC3339),
+		}, nil
 	case "remove_runner":
 		owner, repo, repository, err := repositoryArg(args)
 		if err != nil {
@@ -213,6 +367,44 @@ func (m *githubRunnerProviderModule) invokeMethod(ctx context.Context, method st
 			return nil, err
 		}
 		return map[string]any{"removed": true}, nil
+	case "remove_org_runner":
+		organization, err := organizationArg(args)
+		if err != nil {
+			return nil, err
+		}
+		if err := m.requireAllowedOrganization(organization); err != nil {
+			return nil, err
+		}
+		runnerID, err := int64Arg(args, "runner_id")
+		if err != nil {
+			return nil, err
+		}
+		if err := m.client.RemoveOrgRunner(ctx, organization, runnerID, m.config.Token); err != nil {
+			return nil, err
+		}
+		return map[string]any{"removed": true}, nil
+	case "preflight":
+		organization, err := organizationArg(args)
+		if err != nil {
+			return nil, err
+		}
+		if err := m.requireAllowedOrganization(organization); err != nil {
+			return nil, err
+		}
+		runnerGroup, _ := args["runner_group"].(string)
+		runnerGroup = strings.TrimSpace(runnerGroup)
+		if err := m.requireAllowedRunnerGroup(runnerGroup); err != nil {
+			return nil, err
+		}
+		preflight, err := m.client.PreflightOrg(ctx, GitHubRunnerProviderPreflightRequest{
+			Organization: organization,
+			RunnerGroup:  runnerGroup,
+			Labels:       stringListArg(args["labels"]),
+		}, m.config.Token)
+		if err != nil {
+			return nil, err
+		}
+		return preflightMap(preflight), nil
 	default:
 		return nil, fmt.Errorf("unknown github runner provider method %q", method)
 	}
@@ -223,6 +415,9 @@ func (m *githubRunnerProviderModule) HTTPHandler() http.Handler {
 	mux.HandleFunc("GET /healthz", m.handleHealth)
 	mux.HandleFunc("POST /v1/actions/runners/registration-token", m.handleRegistrationToken)
 	mux.HandleFunc("DELETE /v1/actions/runners/{runner_id}", m.handleRemoveRunner)
+	mux.HandleFunc("POST /v1/actions/orgs/{organization}/runners/registration-token", m.handleOrgRegistrationToken)
+	mux.HandleFunc("DELETE /v1/actions/orgs/{organization}/runners/{runner_id}", m.handleRemoveOrgRunner)
+	mux.HandleFunc("POST /v1/actions/orgs/{organization}/runners/preflight", m.handleOrgPreflight)
 	return mux
 }
 
@@ -269,6 +464,60 @@ func (m *githubRunnerProviderModule) handleRemoveRunner(w http.ResponseWriter, r
 	writeProviderResponse(w, http.StatusNoContent, out)
 }
 
+func (m *githubRunnerProviderModule) handleOrgRegistrationToken(w http.ResponseWriter, r *http.Request) {
+	out, err := m.invokeMethod(r.Context(), "org_registration_token", map[string]any{
+		"organization":   r.PathValue("organization"),
+		"provider_token": bearerToken(r),
+	})
+	if err != nil {
+		writeProviderError(w, providerErrorStatus(err), err)
+		return
+	}
+	writeProviderResponse(w, http.StatusCreated, out)
+}
+
+func (m *githubRunnerProviderModule) handleRemoveOrgRunner(w http.ResponseWriter, r *http.Request) {
+	runnerID, err := strconv.ParseInt(r.PathValue("runner_id"), 10, 64)
+	if err != nil || runnerID <= 0 {
+		writeProviderError(w, http.StatusBadRequest, errors.New("runner_id must be positive"))
+		return
+	}
+	out, err := m.invokeMethod(r.Context(), "remove_org_runner", map[string]any{
+		"organization":   r.PathValue("organization"),
+		"runner_id":      runnerID,
+		"provider_token": bearerToken(r),
+	})
+	if err != nil {
+		writeProviderError(w, providerErrorStatus(err), err)
+		return
+	}
+	writeProviderResponse(w, http.StatusNoContent, out)
+}
+
+func (m *githubRunnerProviderModule) handleOrgPreflight(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RunnerGroup string   `json:"runner_group"`
+		Labels      []string `json:"labels"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeProviderError(w, http.StatusBadRequest, fmt.Errorf("decode request: %w", err))
+		return
+	}
+	out, err := m.invokeMethod(r.Context(), "preflight", map[string]any{
+		"organization":   r.PathValue("organization"),
+		"runner_group":   req.RunnerGroup,
+		"labels":         req.Labels,
+		"provider_token": bearerToken(r),
+	})
+	if err != nil {
+		writeProviderError(w, providerErrorStatus(err), err)
+		return
+	}
+	writeProviderResponse(w, http.StatusOK, out)
+}
+
 func bearerToken(r *http.Request) string {
 	value := r.Header.Get("Authorization")
 	token, ok := strings.CutPrefix(value, "Bearer ")
@@ -283,9 +532,13 @@ func providerErrorStatus(err error) int {
 	switch {
 	case strings.Contains(message, "provider token"):
 		return http.StatusUnauthorized
-	case errors.Is(err, errRepositoryNotAllowlisted):
+	case errors.Is(err, errRepositoryNotAllowlisted), errors.Is(err, errOrganizationNotAllowlisted), errors.Is(err, errRunnerGroupNotAllowlisted):
 		return http.StatusForbidden
 	case strings.Contains(message, "repository"):
+		return http.StatusBadRequest
+	case strings.Contains(message, "organization"):
+		return http.StatusBadRequest
+	case strings.Contains(message, "runner group"):
 		return http.StatusBadRequest
 	case strings.Contains(message, "runner_id"):
 		return http.StatusBadRequest
@@ -317,10 +570,34 @@ func (m *githubRunnerProviderModule) authorizeProvider(args map[string]any) erro
 
 func (m *githubRunnerProviderModule) requireAllowedRepository(repository string) error {
 	if len(m.config.Repositories) == 0 {
-		return nil
+		return fmt.Errorf("%w: config.repositories is required for repository-scoped runner operations", errRepositoryNotAllowlisted)
 	}
 	if _, ok := m.config.Repositories[canonicalRepository(repository)]; !ok {
 		return fmt.Errorf("%w: %s", errRepositoryNotAllowlisted, repository)
+	}
+	return nil
+}
+
+func (m *githubRunnerProviderModule) requireAllowedOrganization(organization string) error {
+	if len(m.config.Organizations) == 0 {
+		return fmt.Errorf("%w: config.organizations is required for organization-scoped runner operations", errOrganizationNotAllowlisted)
+	}
+	if _, ok := m.config.Organizations[canonicalOrganization(organization)]; !ok {
+		return fmt.Errorf("%w: %s", errOrganizationNotAllowlisted, organization)
+	}
+	return nil
+}
+
+func (m *githubRunnerProviderModule) requireAllowedRunnerGroup(runnerGroup string) error {
+	runnerGroup = strings.TrimSpace(runnerGroup)
+	if len(m.config.RunnerGroups) == 0 {
+		return nil
+	}
+	if runnerGroup == "" {
+		return fmt.Errorf("%w: runner_group is required when config.runner_groups is set", errRunnerGroupNotAllowlisted)
+	}
+	if _, ok := m.config.RunnerGroups[strings.ToLower(runnerGroup)]; !ok {
+		return fmt.Errorf("%w: %s", errRunnerGroupNotAllowlisted, runnerGroup)
 	}
 	return nil
 }
@@ -389,6 +666,95 @@ func parseRunnerProviderRepositories(value any) (map[string]struct{}, error) {
 	return out, nil
 }
 
+func parseRunnerProviderOrganizations(value any) (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+	add := func(organization string) error {
+		normalized, err := parseOrganization(organization)
+		if err != nil {
+			return err
+		}
+		out[canonicalOrganization(normalized)] = struct{}{}
+		return nil
+	}
+	switch v := value.(type) {
+	case nil:
+		return out, nil
+	case []any:
+		for _, item := range v {
+			organization, ok := item.(string)
+			if !ok {
+				return nil, errors.New("config.organizations entries must be strings")
+			}
+			if err := add(organization); err != nil {
+				return nil, err
+			}
+		}
+	case []string:
+		for _, organization := range v {
+			if err := add(organization); err != nil {
+				return nil, err
+			}
+		}
+	case string:
+		for part := range strings.SplitSeq(v, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			if err := add(part); err != nil {
+				return nil, err
+			}
+		}
+	default:
+		return nil, errors.New("config.organizations must be a string list")
+	}
+	return out, nil
+}
+
+func parseRunnerProviderStringSet(value any, name string) (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+	add := func(item string) error {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			return nil
+		}
+		if strings.ContainsAny(item, "\t\r\n") || strings.Contains(item, "..") {
+			return fmt.Errorf("%s contains invalid characters", name)
+		}
+		out[strings.ToLower(item)] = struct{}{}
+		return nil
+	}
+	switch v := value.(type) {
+	case nil:
+		return out, nil
+	case []any:
+		for _, item := range v {
+			text, ok := item.(string)
+			if !ok {
+				return nil, fmt.Errorf("%s entries must be strings", name)
+			}
+			if err := add(text); err != nil {
+				return nil, err
+			}
+		}
+	case []string:
+		for _, item := range v {
+			if err := add(item); err != nil {
+				return nil, err
+			}
+		}
+	case string:
+		for part := range strings.SplitSeq(v, ",") {
+			if err := add(part); err != nil {
+				return nil, err
+			}
+		}
+	default:
+		return nil, fmt.Errorf("%s must be a string list", name)
+	}
+	return out, nil
+}
+
 func repositoryArg(args map[string]any) (string, string, string, error) {
 	repository, _ := args["repository"].(string)
 	owner, repo, normalized, err := parseRepository(repository)
@@ -396,6 +762,26 @@ func repositoryArg(args map[string]any) (string, string, string, error) {
 		return "", "", "", err
 	}
 	return owner, repo, normalized, nil
+}
+
+func organizationArg(args map[string]any) (string, error) {
+	organization, _ := args["organization"].(string)
+	return parseOrganization(organization)
+}
+
+func parseOrganization(organization string) (string, error) {
+	organization = strings.TrimSpace(organization)
+	if organization == "" {
+		return "", errors.New("organization is required")
+	}
+	if strings.Contains(organization, "/") || strings.ContainsAny(organization, " \t\r\n") || strings.Contains(organization, "..") {
+		return "", errors.New("organization contains invalid characters")
+	}
+	return organization, nil
+}
+
+func canonicalOrganization(organization string) string {
+	return strings.ToLower(strings.TrimSpace(organization))
 }
 
 func parseRepository(repository string) (string, string, string, error) {
@@ -413,6 +799,40 @@ func parseRepository(repository string) (string, string, string, error) {
 func canonicalRepository(repository string) string {
 	owner, repo, _ := strings.Cut(repository, "/")
 	return strings.ToLower(owner) + "/" + strings.ToLower(repo)
+}
+
+func stringListArg(value any) []string {
+	var out []string
+	switch v := value.(type) {
+	case []string:
+		out = append(out, v...)
+	case []any:
+		for _, item := range v {
+			if text, ok := item.(string); ok {
+				out = append(out, text)
+			}
+		}
+	case string:
+		for part := range strings.SplitSeq(v, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				out = append(out, part)
+			}
+		}
+	}
+	return out
+}
+
+func preflightMap(preflight GitHubRunnerProviderPreflight) map[string]any {
+	return map[string]any{
+		"organization":         preflight.Organization,
+		"runner_group":         preflight.RunnerGroup,
+		"existing_labels":      preflight.ExistingLabels,
+		"conflicting_labels":   preflight.ConflictingLabels,
+		"runner_count_checked": preflight.RunnerCountChecked,
+		"actions_enabled":      preflight.ActionsEnabled,
+		"self_hosted_allowed":  preflight.SelfHostedAllowed,
+	}
 }
 
 func int64Arg(args map[string]any, key string) (int64, error) {
