@@ -10,6 +10,8 @@ import (
 
 var ErrEphemeralRunnerCapabilityUnsupported = errors.New("ephemeral runner capability unsupported")
 
+const ephemeralRunnerCleanupTimeout = 30 * time.Second
+
 type EphemeralRunnerJobMode string
 
 const (
@@ -108,13 +110,21 @@ func (j *EphemeralRunnerJob) Run(ctx context.Context, req EphemeralRunnerJobRequ
 	if err != nil {
 		return EphemeralRunnerJobResult{}, err
 	}
-	token, err := j.driver.OrgRegistrationToken(ctx, req.Organization)
+	jobCtx := ctx
+	cancel := func() {}
+	if req.Timeout > 0 {
+		jobCtx, cancel = context.WithTimeout(ctx, req.Timeout)
+	}
+	defer cancel()
+	token, err := j.driver.OrgRegistrationToken(jobCtx, req.Organization)
 	if err != nil {
 		return EphemeralRunnerJobResult{}, err
 	}
-	result, runErr := j.driver.RunGitHubJob(ctx, req.Mode, spec, token)
+	result, runErr := j.driver.RunGitHubJob(jobCtx, req.Mode, spec, token)
 	if result.RunnerID > 0 {
-		if err := j.driver.RemoveOrgRunner(ctx, req.Organization, result.RunnerID); err != nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), ephemeralRunnerCleanupTimeout)
+		defer cleanupCancel()
+		if err := j.driver.RemoveOrgRunner(cleanupCtx, req.Organization, result.RunnerID); err != nil {
 			result.CleanupStatus = "remove_failed"
 			if runErr == nil {
 				runErr = err

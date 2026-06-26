@@ -84,7 +84,7 @@ func TestT594EphemeralRunnerJobCleansUpRunnerOnTimeout(t *testing.T) {
 			RunnerName:    "wfc-stg-ghp-linux-01234567-abcdef98",
 			CleanupStatus: "pending",
 		},
-		runErr: context.DeadlineExceeded,
+		blockUntilDone: true,
 	}
 	job := NewEphemeralRunnerJob(driver)
 	result, err := job.Run(context.Background(), EphemeralRunnerJobRequest{
@@ -94,10 +94,16 @@ func TestT594EphemeralRunnerJobCleansUpRunnerOnTimeout(t *testing.T) {
 		WorkerID:     "worker-0123456789abcdef",
 		TaskID:       "task-abcdef9876543210",
 		Organization: "GoCodeAlone",
-		Timeout:      time.Millisecond,
+		Timeout:      10 * time.Millisecond,
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error: got %v", err)
+	}
+	if !driver.runDeadlineSet {
+		t.Fatal("run context did not receive request timeout deadline")
+	}
+	if driver.cleanupContextDone {
+		t.Fatal("cleanup used the already-expired run context")
 	}
 	if driver.removedOrganization != "GoCodeAlone" || driver.removedRunnerID != 42 {
 		t.Fatalf("cleanup: org=%q runner=%d", driver.removedOrganization, driver.removedRunnerID)
@@ -204,6 +210,9 @@ type fakeEphemeralRunnerDriver struct {
 	spec                EphemeralRunnerJobSpec
 	result              EphemeralRunnerJobResult
 	runErr              error
+	blockUntilDone      bool
+	runDeadlineSet      bool
+	cleanupContextDone  bool
 	removedOrganization string
 	removedRunnerID     int64
 }
@@ -212,13 +221,23 @@ func (f *fakeEphemeralRunnerDriver) OrgRegistrationToken(_ context.Context, _ st
 	return GitHubRunnerRegistrationToken{Token: "runner-token", ExpiresAt: time.Now().Add(time.Hour)}, nil
 }
 
-func (f *fakeEphemeralRunnerDriver) RunGitHubJob(_ context.Context, mode EphemeralRunnerJobMode, spec EphemeralRunnerJobSpec, _ GitHubRunnerRegistrationToken) (EphemeralRunnerJobResult, error) {
+func (f *fakeEphemeralRunnerDriver) RunGitHubJob(ctx context.Context, mode EphemeralRunnerJobMode, spec EphemeralRunnerJobSpec, _ GitHubRunnerRegistrationToken) (EphemeralRunnerJobResult, error) {
 	f.mode = mode
 	f.spec = spec
+	_, f.runDeadlineSet = ctx.Deadline()
+	if f.blockUntilDone {
+		<-ctx.Done()
+		return f.result, ctx.Err()
+	}
 	return f.result, f.runErr
 }
 
-func (f *fakeEphemeralRunnerDriver) RemoveOrgRunner(_ context.Context, organization string, runnerID int64) error {
+func (f *fakeEphemeralRunnerDriver) RemoveOrgRunner(ctx context.Context, organization string, runnerID int64) error {
+	select {
+	case <-ctx.Done():
+		f.cleanupContextDone = true
+	default:
+	}
 	f.removedOrganization = organization
 	f.removedRunnerID = runnerID
 	return nil
