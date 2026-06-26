@@ -58,8 +58,20 @@ func TestReleasePublishesGitHubActionsRunnerJobImage(t *testing.T) {
 		t.Fatalf("read release workflow: %v", err)
 	}
 	workflow := string(data)
+	topPermissions := topLevelSection(workflow, "permissions:")
+	if strings.Contains(topPermissions, "packages:") {
+		t.Fatal("release workflow must not grant packages permissions at workflow scope")
+	}
+
+	job := workflowJobSection(workflow, "publish-runner-job-image")
+	if job == "" {
+		t.Fatal("release workflow must define publish-runner-job-image job")
+	}
 
 	for _, want := range []string{
+		"needs: release",
+		"!contains(github.ref_name, '-')",
+		"github.repository == 'GoCodeAlone/workflow-plugin-github'",
 		"packages: write",
 		"GOOS=linux GOARCH=amd64 go build -o dist/github-actions-runner-job-linux-amd64 ./cmd/github-actions-runner-job",
 		"GOOS=linux GOARCH=arm64 go build -o dist/github-actions-runner-job-linux-arm64 ./cmd/github-actions-runner-job",
@@ -73,8 +85,8 @@ func TestReleasePublishesGitHubActionsRunnerJobImage(t *testing.T) {
 		"ghcr.io/gocodealone/workflow-plugin-github/github-actions-runner-job:${{ github.ref_name }}",
 		"ghcr.io/gocodealone/workflow-plugin-github/github-actions-runner-job:latest",
 	} {
-		if !strings.Contains(workflow, want) {
-			t.Fatalf("release workflow must include %q so the runner-job image is available to workflow-compute agents", want)
+		if !strings.Contains(job, want) {
+			t.Fatalf("publish-runner-job-image job must include %q so the runner-job image is available to workflow-compute agents", want)
 		}
 	}
 }
@@ -134,6 +146,26 @@ func topLevelSection(config, header string) string {
 			section = append(section, next)
 		}
 		return strings.Join(section, "\n")
+	}
+	return ""
+}
+
+func workflowJobSection(config, jobName string) string {
+	lines := strings.Split(config, "\n")
+	marker := "  " + jobName + ":"
+	for i, line := range lines {
+		if line != marker {
+			continue
+		}
+
+		item := []string{line}
+		for _, next := range lines[i+1:] {
+			if strings.HasPrefix(next, "  ") && !strings.HasPrefix(next, "    ") {
+				break
+			}
+			item = append(item, next)
+		}
+		return strings.Join(item, "\n")
 	}
 	return ""
 }

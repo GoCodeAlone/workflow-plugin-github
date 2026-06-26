@@ -74,6 +74,11 @@ jobs:
   publish-runner-job-image:
     name: Publish runner-job image
     runs-on: ubuntu-latest
+    needs: release
+    if: >-
+      !github.event.deleted
+      && !contains(github.ref_name, '-')
+      && github.repository == 'GoCodeAlone/workflow-plugin-github'
     permissions:
       contents: read
       packages: write
@@ -116,7 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    needs: [release, publish-runner-job-image]
+    needs: publish-runner-job-image
     if: >-
       !github.event.deleted
       && !contains(github.ref_name, '-')
