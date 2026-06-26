@@ -43,6 +43,8 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 		"provider_token": providerToken,
 		"api_base_url":   os.Getenv("GITHUB_API_BASE_URL"),
 		"repositories":   strings.TrimSpace(os.Getenv("GITHUB_RUNNER_PROVIDER_REPOSITORIES")),
+		"organizations":  strings.TrimSpace(os.Getenv("GITHUB_RUNNER_PROVIDER_ORGANIZATIONS")),
+		"runner_groups":  strings.TrimSpace(os.Getenv("GITHUB_RUNNER_PROVIDER_RUNNER_GROUPS")),
 	})
 	if err != nil {
 		return err

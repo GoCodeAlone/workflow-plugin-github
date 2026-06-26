@@ -86,7 +86,7 @@ func (p *githubPlugin) ModuleSchemas() []sdk.ModuleSchemaData {
 			Type:        "github.runner_provider",
 			Label:       "GitHub Runner Provider",
 			Category:    "github",
-			Description: "Mints and removes repository-scoped GitHub Actions self-hosted runners for workflow-compute through an authenticated provider boundary.",
+			Description: "Mints, preflights, and removes GitHub Actions self-hosted runners for workflow-compute through an authenticated provider boundary.",
 			ConfigFields: []sdk.ConfigField{
 				{
 					Name:        "token",
@@ -103,8 +103,20 @@ func (p *githubPlugin) ModuleSchemas() []sdk.ModuleSchemaData {
 				{
 					Name:        "repositories",
 					Type:        "array",
-					Description: "Allowed repositories in owner/name form.",
-					Required:    true,
+					Description: "Allowed repositories in owner/name form for repository-scoped runners.",
+					Required:    false,
+				},
+				{
+					Name:        "organizations",
+					Type:        "array",
+					Description: "Allowed organizations for organization-scoped runners.",
+					Required:    false,
+				},
+				{
+					Name:        "runner_groups",
+					Type:        "array",
+					Description: "Allowed organization runner groups. Empty allows any runner group inside an allowed organization.",
+					Required:    false,
 				},
 				{
 					Name:        "api_base_url",
@@ -116,6 +128,9 @@ func (p *githubPlugin) ModuleSchemas() []sdk.ModuleSchemaData {
 			Inputs: []sdk.ServiceIO{
 				{Name: "registration_token", Type: "method", Description: "Returns a short-lived GitHub runner registration token for an allowlisted repository."},
 				{Name: "remove_runner", Type: "method", Description: "Removes a GitHub Actions self-hosted runner from an allowlisted repository."},
+				{Name: "org_registration_token", Type: "method", Description: "Returns a short-lived GitHub runner registration token for an allowlisted organization."},
+				{Name: "remove_org_runner", Type: "method", Description: "Removes a GitHub Actions self-hosted runner from an allowlisted organization."},
+				{Name: "preflight", Type: "method", Description: "Checks allowlisted organization runner access and requested labels before runner enrollment."},
 			},
 		},
 	}

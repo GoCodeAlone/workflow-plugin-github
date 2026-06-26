@@ -26,8 +26,9 @@ The module registers an HTTP handler at `/webhooks/github`. Configure your GitHu
 ### Module: `github.runner_provider`
 
 Provides the GitHub-owned side of the workflow-compute runner provider boundary.
-It mints repository-scoped GitHub Actions runner registration tokens and removes
-runners without exposing GitHub API credentials to workflow-compute.
+It mints repository- or organization-scoped GitHub Actions runner registration
+tokens, preflights organization runner labels/groups, and removes runners
+without exposing GitHub API credentials to workflow-compute.
 
 ```yaml
 modules:
@@ -37,6 +38,8 @@ modules:
       token: "${GITHUB_TOKEN}"
       provider_token: "${GITHUB_RUNNER_PROVIDER_TOKEN}"
       repositories: ["GoCodeAlone/workflow-compute"]
+      organizations: ["GoCodeAlone"]
+      runner_groups: ["workflow-compute-stg"]
 ```
 
 For local proof runs, the repo also builds `github-runner-provider`, a small
@@ -46,6 +49,8 @@ HTTP provider service:
 GITHUB_TOKEN=... \
 GITHUB_RUNNER_PROVIDER_TOKEN=... \
 GITHUB_RUNNER_PROVIDER_REPOSITORIES=GoCodeAlone/workflow-compute \
+GITHUB_RUNNER_PROVIDER_ORGANIZATIONS=GoCodeAlone \
+GITHUB_RUNNER_PROVIDER_RUNNER_GROUPS=workflow-compute-stg \
   bin/github-runner-provider 127.0.0.1:8090
 ```
 

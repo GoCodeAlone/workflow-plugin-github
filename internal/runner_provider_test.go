@@ -42,6 +42,57 @@ func TestT41_GitHubRunnerClientMintsRegistrationToken(t *testing.T) {
 	}
 }
 
+func TestT593_GitHubRunnerClientPreflightChecksPaginatedOrgRunnerLabels(t *testing.T) {
+	var serverURL string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method: got %q want GET", r.Method)
+		}
+		if r.URL.Path != "/orgs/GoCodeAlone/actions/runners" {
+			t.Fatalf("path: got %q", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer github-token" {
+			t.Fatalf("authorization header: got %q", r.Header.Get("Authorization"))
+		}
+		switch r.URL.Query().Get("page") {
+		case "":
+			w.Header().Set("Link", `<`+serverURL+`/orgs/GoCodeAlone/actions/runners?per_page=100&page=2>; rel="next"`)
+			writeRunnerProviderJSON(t, w, http.StatusOK, map[string]any{
+				"total_count": 2,
+				"runners": []map[string]any{
+					{"labels": []map[string]string{{"name": "linux"}}},
+				},
+			})
+		case "2":
+			writeRunnerProviderJSON(t, w, http.StatusOK, map[string]any{
+				"total_count": 2,
+				"runners": []map[string]any{
+					{"labels": []map[string]string{{"name": "wfc-ghp-stg"}}},
+				},
+			})
+		default:
+			t.Fatalf("unexpected page: %q", r.URL.Query().Get("page"))
+		}
+	}))
+	defer server.Close()
+	serverURL = server.URL
+
+	client := &httpGitHubRunnerClient{baseURL: server.URL, httpClient: server.Client()}
+	result, err := client.PreflightOrg(context.Background(), GitHubRunnerProviderPreflightRequest{
+		Organization: "GoCodeAlone",
+		Labels:       []string{"wfc-ghp-stg"},
+	}, "github-token")
+	if err != nil {
+		t.Fatalf("preflight: %v", err)
+	}
+	if result.RunnerCountChecked != 2 {
+		t.Fatalf("runner count: got %d", result.RunnerCountChecked)
+	}
+	if len(result.ConflictingLabels) != 1 || result.ConflictingLabels[0] != "wfc-ghp-stg" {
+		t.Fatalf("conflicting labels: got %+v", result.ConflictingLabels)
+	}
+}
+
 func TestT41_GitHubRunnerProviderModuleRejectsUnknownConfig(t *testing.T) {
 	_, err := newGitHubRunnerProviderModule("provider", map[string]any{
 		"token":      "github-token",
@@ -340,14 +391,14 @@ func TestT593_RunnerProviderProtoConfigDeclaresOrgFields(t *testing.T) {
 }
 
 type fakeRunnerClient struct {
-	token                  GitHubRunnerRegistrationToken
-	registrationRepository string
+	token                       GitHubRunnerRegistrationToken
+	registrationRepository      string
 	orgRegistrationOrganization string
-	removedRepository      string
-	removedOrganization    string
-	removedRunnerID        int64
-	preflight              GitHubRunnerProviderPreflight
-	preflightOrganization  string
+	removedRepository           string
+	removedOrganization         string
+	removedRunnerID             int64
+	preflight                   GitHubRunnerProviderPreflight
+	preflightOrganization       string
 }
 
 func (f *fakeRunnerClient) RegistrationToken(_ context.Context, owner, repo, _ string) (GitHubRunnerRegistrationToken, error) {
