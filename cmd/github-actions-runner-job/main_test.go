@@ -12,7 +12,7 @@ import (
 )
 
 func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testing.T) {
-	var tokenCalls, dispatchCalls int
+	var tokenCalls, dispatchCalls, deleteCalls int
 	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer provider-token" {
 			t.Fatalf("authorization = %q", got)
@@ -25,6 +25,9 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/dispatches":
 			dispatchCalls++
 			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/42":
+			deleteCalls++
+			w.WriteHeader(http.StatusNoContent)
 		default:
 			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.Path)
 		}
@@ -32,7 +35,7 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 	t.Cleanup(sidecar.Close)
 
 	runnerDir := t.TempDir()
-	writeExecutable(t, filepath.Join(runnerDir, "config.sh"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/config.args\"\n")
+	writeExecutable(t, filepath.Join(runnerDir, "config.sh"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/config.args\"\nprintf '{\"agentId\":42}\\n' > .runner\n")
 	writeExecutable(t, filepath.Join(runnerDir, "run.sh"), "#!/bin/sh\nprintf 'runner executed\\n' > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.log\"\n")
 	workspace := t.TempDir()
 	t.Chdir(workspace)
@@ -64,8 +67,8 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 	if err := runWithIO([]string{}, input, &stdout, &stderr); err != nil {
 		t.Fatalf("run dynamic provider: %v\nstderr:\n%s", err, stderr.String())
 	}
-	if tokenCalls != 1 || dispatchCalls != 1 {
-		t.Fatalf("sidecar calls: token=%d dispatch=%d", tokenCalls, dispatchCalls)
+	if tokenCalls != 1 || dispatchCalls != 1 || deleteCalls != 1 {
+		t.Fatalf("sidecar calls: token=%d dispatch=%d delete=%d", tokenCalls, dispatchCalls, deleteCalls)
 	}
 	configArgs := readFile(t, filepath.Join(workspace, "config.args"))
 	for _, want := range []string{
@@ -97,6 +100,21 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 		if !strings.Contains(proof, want) {
 			t.Fatalf("proof missing %q:\n%s", want, proof)
 		}
+	}
+}
+
+func TestT915CommandRejectsUnknownDynamicInputFields(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := runWithIO([]string{}, strings.NewReader(`{
+	  "protocol_version":"compute.v1alpha1",
+	  "task_id":"task-1",
+	  "lease_id":"lease-1",
+	  "provider_config":{"plugin_id":"workflow-plugin-github","provider_id":"github-actions-runner"},
+	  "operation":"ephemeral_runner_job",
+	  "input":{"environment":"stg","os":"linux","worker_id":"worker-1","task_id":"task-1","organization":"GoCodeAlone","typo":true}
+	}`), &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("error = %v, want strict unknown field rejection", err)
 	}
 }
 

@@ -73,9 +73,9 @@ func runParsed(specOnly bool, stdin io.Reader, stdout io.Writer) error {
 	if err := envelope.validate(); err != nil {
 		return err
 	}
-	var req internal.EphemeralRunnerJobRequest
-	if err := json.Unmarshal(envelope.Input, &req); err != nil {
-		return fmt.Errorf("decode ephemeral runner request: %w", err)
+	req, err := decodeEphemeralRunnerRequest(envelope.Input)
+	if err != nil {
+		return err
 	}
 	sidecar, err := newSidecarClientFromEnv()
 	if err != nil {
@@ -126,6 +126,16 @@ func (e dynamicProviderEnvelope) validate() error {
 	return nil
 }
 
+func decodeEphemeralRunnerRequest(input json.RawMessage) (internal.EphemeralRunnerJobRequest, error) {
+	var req internal.EphemeralRunnerJobRequest
+	decoder := json.NewDecoder(bytes.NewReader(input))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		return internal.EphemeralRunnerJobRequest{}, fmt.Errorf("decode ephemeral runner request: %w", err)
+	}
+	return req, nil
+}
+
 type providerSidecarClient struct {
 	baseURL string
 	token   string
@@ -163,6 +173,11 @@ func (c *providerSidecarClient) dispatchWorkflow(ctx context.Context, repository
 	}
 	path := "/v1/actions/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/workflows/" + url.PathEscape(workflow) + "/dispatches"
 	return c.do(ctx, http.MethodPost, path, map[string]any{"ref": ref}, http.StatusNoContent, nil)
+}
+
+func (c *providerSidecarClient) removeOrgRunner(ctx context.Context, organization string, runnerID int64) error {
+	path := fmt.Sprintf("/v1/actions/orgs/%s/runners/%d", url.PathEscape(organization), runnerID)
+	return c.do(ctx, http.MethodDelete, path, nil, http.StatusNoContent, nil)
 }
 
 func (c *providerSidecarClient) do(ctx context.Context, method, path string, body any, wantStatus int, out any) error {
@@ -236,18 +251,20 @@ func (d *runnerDriver) RunGitHubJob(ctx context.Context, mode internal.Ephemeral
 	if err := d.configureRunner(ctx, spec, token.Token); err != nil {
 		return internal.EphemeralRunnerJobResult{}, err
 	}
+	runnerID := d.runnerID()
 	if err := d.runRunner(ctx); err != nil {
 		return internal.EphemeralRunnerJobResult{}, err
 	}
 	return internal.EphemeralRunnerJobResult{
+		RunnerID:      runnerID,
 		RunnerName:    spec.RunnerName,
 		Labels:        append([]string(nil), spec.Labels...),
 		CleanupStatus: "removed",
 	}, nil
 }
 
-func (d *runnerDriver) RemoveOrgRunner(context.Context, string, int64) error {
-	return nil
+func (d *runnerDriver) RemoveOrgRunner(ctx context.Context, organization string, runnerID int64) error {
+	return d.sidecar.removeOrgRunner(ctx, organization, runnerID)
 }
 
 func (d *runnerDriver) configureRunner(ctx context.Context, spec internal.EphemeralRunnerJobSpec, token string) error {
@@ -268,6 +285,20 @@ func (d *runnerDriver) configureRunner(ctx context.Context, spec internal.Epheme
 
 func (d *runnerDriver) runRunner(ctx context.Context) error {
 	return runCommand(ctx, filepath.Join(d.runnerDir, "run.sh"), d.runnerDir)
+}
+
+func (d *runnerDriver) runnerID() int64 {
+	data, err := os.ReadFile(filepath.Join(d.runnerDir, ".runner"))
+	if err != nil {
+		return 0
+	}
+	var metadata struct {
+		AgentID int64 `json:"agentId"`
+	}
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return 0
+	}
+	return metadata.AgentID
 }
 
 func runCommand(ctx context.Context, path, dir string, args ...string) error {
