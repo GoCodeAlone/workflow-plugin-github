@@ -169,6 +169,36 @@ func TestT594EphemeralRunnerJobRejectsDockerOrIaCWithoutCapabilityExtras(t *test
 	}
 }
 
+func TestT594RunnerProviderInvokesEphemeralRunnerJobSpec(t *testing.T) {
+	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
+		"token":          "github-token",
+		"provider_token": "provider-token",
+		"organizations":  []any{"GoCodeAlone"},
+	}, &fakeRunnerClient{})
+	if err != nil {
+		t.Fatalf("module: %v", err)
+	}
+
+	result, err := module.InvokeMethod("ephemeral_runner_job", map[string]any{
+		"provider_token": "provider-token",
+		"environment":    "stg",
+		"os":             "linux",
+		"worker_id":      "worker-0123456789abcdef",
+		"task_id":        "task-abcdef9876543210",
+		"organization":   "GoCodeAlone",
+		"runner_group":   "workflow-compute-stg",
+	})
+	if err != nil {
+		t.Fatalf("invoke ephemeral_runner_job: %v", err)
+	}
+	if result["runner_name"] != "wfc-stg-ghp-linux-01234567-abcdef98" {
+		t.Fatalf("runner name: got %+v", result)
+	}
+	if labels, ok := result["labels"].([]string); !ok || len(labels) != 5 || labels[3] != "wfc-ghp-stg" {
+		t.Fatalf("labels: got %#v", result["labels"])
+	}
+}
+
 type fakeEphemeralRunnerDriver struct {
 	mode                EphemeralRunnerJobMode
 	spec                EphemeralRunnerJobSpec

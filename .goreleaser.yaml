@@ -36,12 +36,26 @@ builds:
     goarch:
       - amd64
       - arm64
+  - id: github-actions-runner-job
+    main: ./cmd/github-actions-runner-job
+    binary: github-actions-runner-job
+    env:
+      - CGO_ENABLED=0
+      - GOPRIVATE=github.com/GoCodeAlone/*
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
 
 archives:
   - id: workflow-plugin-github
     ids:
       - workflow-plugin-github
       - github-runner-provider
+      - github-actions-runner-job
     name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
     files:
       - plugin.json

@@ -405,6 +405,23 @@ func (m *githubRunnerProviderModule) invokeMethod(ctx context.Context, method st
 			return nil, err
 		}
 		return preflightMap(preflight), nil
+	case "ephemeral_runner_job":
+		req, err := ephemeralRunnerJobRequestFromArgs(args)
+		if err != nil {
+			return nil, err
+		}
+		if err := m.requireAllowedOrganization(req.Organization); err != nil {
+			return nil, err
+		}
+		spec, err := BuildEphemeralRunnerJobSpec(req)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{
+			"runner_name":  spec.RunnerName,
+			"labels":       spec.Labels,
+			"runner_group": spec.RunnerGroup,
+		}, nil
 	default:
 		return nil, fmt.Errorf("unknown github runner provider method %q", method)
 	}
@@ -829,6 +846,32 @@ func preflightMap(preflight GitHubRunnerProviderPreflight) map[string]any {
 		"actions_enabled":      preflight.ActionsEnabled,
 		"self_hosted_allowed":  preflight.SelfHostedAllowed,
 	}
+}
+
+func ephemeralRunnerJobRequestFromArgs(args map[string]any) (EphemeralRunnerJobRequest, error) {
+	organization, err := organizationArg(args)
+	if err != nil {
+		return EphemeralRunnerJobRequest{}, err
+	}
+	return EphemeralRunnerJobRequest{
+		Mode:                EphemeralRunnerJobMode(stringArg(args, "mode")),
+		Environment:         stringArg(args, "environment"),
+		OS:                  stringArg(args, "os"),
+		WorkerID:            stringArg(args, "worker_id"),
+		TaskID:              stringArg(args, "task_id"),
+		Organization:        organization,
+		Repository:          stringArg(args, "repository"),
+		Workflow:            stringArg(args, "workflow"),
+		Ref:                 stringArg(args, "ref"),
+		RunnerGroup:         stringArg(args, "runner_group"),
+		RequiredRuntimeCaps: stringListArg(args["required_runtime_caps"]),
+		AdvertisedCaps:      stringListArg(args["advertised_caps"]),
+	}, nil
+}
+
+func stringArg(args map[string]any, key string) string {
+	value, _ := args[key].(string)
+	return strings.TrimSpace(value)
 }
 
 func int64Arg(args map[string]any, key string) (int64, error) {

@@ -131,6 +131,7 @@ func (p *githubPlugin) ModuleSchemas() []sdk.ModuleSchemaData {
 				{Name: "org_registration_token", Type: "method", Description: "Returns a short-lived GitHub runner registration token for an allowlisted organization."},
 				{Name: "remove_org_runner", Type: "method", Description: "Removes a GitHub Actions self-hosted runner from an allowlisted organization."},
 				{Name: "preflight", Type: "method", Description: "Checks allowlisted organization runner access and requested labels before runner enrollment."},
+				{Name: "ephemeral_runner_job", Type: "method", Description: "Builds the provider-owned ephemeral GitHub Actions runner job specification for workflow-compute agents."},
 			},
 		},
 	}
