@@ -587,7 +587,7 @@ func (m *githubRunnerProviderModule) authorizeProvider(args map[string]any) erro
 
 func (m *githubRunnerProviderModule) requireAllowedRepository(repository string) error {
 	if len(m.config.Repositories) == 0 {
-		return nil
+		return fmt.Errorf("%w: config.repositories is required for repository-scoped runner operations", errRepositoryNotAllowlisted)
 	}
 	if _, ok := m.config.Repositories[canonicalRepository(repository)]; !ok {
 		return fmt.Errorf("%w: %s", errRepositoryNotAllowlisted, repository)
@@ -597,7 +597,7 @@ func (m *githubRunnerProviderModule) requireAllowedRepository(repository string)
 
 func (m *githubRunnerProviderModule) requireAllowedOrganization(organization string) error {
 	if len(m.config.Organizations) == 0 {
-		return nil
+		return fmt.Errorf("%w: config.organizations is required for organization-scoped runner operations", errOrganizationNotAllowlisted)
 	}
 	if _, ok := m.config.Organizations[canonicalOrganization(organization)]; !ok {
 		return fmt.Errorf("%w: %s", errOrganizationNotAllowlisted, organization)
@@ -606,8 +606,12 @@ func (m *githubRunnerProviderModule) requireAllowedOrganization(organization str
 }
 
 func (m *githubRunnerProviderModule) requireAllowedRunnerGroup(runnerGroup string) error {
-	if runnerGroup == "" || len(m.config.RunnerGroups) == 0 {
+	runnerGroup = strings.TrimSpace(runnerGroup)
+	if len(m.config.RunnerGroups) == 0 {
 		return nil
+	}
+	if runnerGroup == "" {
+		return fmt.Errorf("%w: runner_group is required when config.runner_groups is set", errRunnerGroupNotAllowlisted)
 	}
 	if _, ok := m.config.RunnerGroups[strings.ToLower(runnerGroup)]; !ok {
 		return fmt.Errorf("%w: %s", errRunnerGroupNotAllowlisted, runnerGroup)
