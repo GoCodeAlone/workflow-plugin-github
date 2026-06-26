@@ -257,6 +257,25 @@ func TestT41_GitHubRunnerProviderHTTPRejectsUnallowlistedRepository(t *testing.T
 	}
 }
 
+func TestT593_GitHubRunnerProviderModuleRejectsRepositoryTokenWithoutRepositoryAllowlist(t *testing.T) {
+	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
+		"token":          "github-token",
+		"provider_token": "provider-token",
+		"organizations":  []any{"GoCodeAlone"},
+	}, &fakeRunnerClient{token: GitHubRunnerRegistrationToken{Token: "runner-token", ExpiresAt: time.Now().UTC().Add(time.Hour)}})
+	if err != nil {
+		t.Fatalf("module: %v", err)
+	}
+
+	_, err = module.InvokeMethod("registration_token", map[string]any{
+		"repository":     "GoCodeAlone/workflow-compute",
+		"provider_token": "provider-token",
+	})
+	if !errors.Is(err, errRepositoryNotAllowlisted) {
+		t.Fatalf("registration_token err: got %v want %v", err, errRepositoryNotAllowlisted)
+	}
+}
+
 func TestT593_GitHubRunnerProviderModuleInvokesOrgRegistrationToken(t *testing.T) {
 	expiresAt := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
 	fake := &fakeRunnerClient{token: GitHubRunnerRegistrationToken{Token: "runner-token", ExpiresAt: expiresAt}}
@@ -342,6 +361,27 @@ func TestT593_GitHubRunnerProviderModulePreflightChecksOrgRunners(t *testing.T) 
 	}
 	if fake.preflightOrganization != "GoCodeAlone" {
 		t.Fatalf("preflight organization: got %q", fake.preflightOrganization)
+	}
+}
+
+func TestT593_GitHubRunnerProviderModuleRejectsMissingAllowlistedRunnerGroup(t *testing.T) {
+	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
+		"token":          "github-token",
+		"provider_token": "provider-token",
+		"organizations":  []any{"GoCodeAlone"},
+		"runner_groups":  []any{"workflow-compute-stg"},
+	}, &fakeRunnerClient{})
+	if err != nil {
+		t.Fatalf("module: %v", err)
+	}
+
+	_, err = module.InvokeMethod("preflight", map[string]any{
+		"organization":   "GoCodeAlone",
+		"labels":         []any{"wfc-ghp-stg"},
+		"provider_token": "provider-token",
+	})
+	if !errors.Is(err, errRunnerGroupNotAllowlisted) {
+		t.Fatalf("preflight err: got %v want %v", err, errRunnerGroupNotAllowlisted)
 	}
 }
 
