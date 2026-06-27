@@ -917,6 +917,7 @@ func ephemeralRunnerJobRequestFromArgs(args map[string]any) (EphemeralRunnerJobR
 		Repository:          stringArg(args, "repository"),
 		Workflow:            stringArg(args, "workflow"),
 		Ref:                 stringArg(args, "ref"),
+		WorkflowInputs:      stringMapArg(args["workflow_inputs"]),
 		RunnerGroup:         stringArg(args, "runner_group"),
 		RequiredRuntimeCaps: stringListArg(args["required_runtime_caps"]),
 		AdvertisedCaps:      stringListArg(args["advertised_caps"]),
@@ -926,6 +927,36 @@ func ephemeralRunnerJobRequestFromArgs(args map[string]any) (EphemeralRunnerJobR
 func stringArg(args map[string]any, key string) string {
 	value, _ := args[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func stringMapArg(value any) map[string]string {
+	switch v := value.(type) {
+	case map[string]string:
+		out := make(map[string]string, len(v))
+		for key, val := range v {
+			key = strings.TrimSpace(key)
+			if key != "" {
+				out[key] = val
+			}
+		}
+		return out
+	case map[string]any:
+		out := make(map[string]string, len(v))
+		for key, val := range v {
+			key = strings.TrimSpace(key)
+			if key == "" {
+				continue
+			}
+			str, ok := val.(string)
+			if !ok {
+				continue
+			}
+			out[key] = str
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func int64Arg(args map[string]any, key string) (int64, error) {

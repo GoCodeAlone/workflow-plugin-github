@@ -166,13 +166,17 @@ func (c *providerSidecarClient) orgRegistrationToken(ctx context.Context, organi
 	return out, nil
 }
 
-func (c *providerSidecarClient) dispatchWorkflow(ctx context.Context, repository, workflow, ref string) error {
+func (c *providerSidecarClient) dispatchWorkflow(ctx context.Context, repository, workflow, ref string, inputs map[string]string) error {
 	owner, repo, err := splitRepository(repository)
 	if err != nil {
 		return err
 	}
 	path := "/v1/actions/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/workflows/" + url.PathEscape(workflow) + "/dispatches"
-	return c.do(ctx, http.MethodPost, path, map[string]any{"ref": ref}, http.StatusNoContent, nil)
+	body := map[string]any{"ref": ref}
+	if len(inputs) > 0 {
+		body["inputs"] = inputs
+	}
+	return c.do(ctx, http.MethodPost, path, body, http.StatusNoContent, nil)
 }
 
 func (c *providerSidecarClient) removeOrgRunner(ctx context.Context, organization string, runnerID int64) error {
@@ -244,7 +248,11 @@ func (d *runnerDriver) RunGitHubJob(ctx context.Context, mode internal.Ephemeral
 		if ref == "" {
 			ref = "main"
 		}
-		if err := d.sidecar.dispatchWorkflow(ctx, d.req.Repository, d.req.Workflow, ref); err != nil {
+		inputs, err := d.workflowDispatchInputs(spec)
+		if err != nil {
+			return internal.EphemeralRunnerJobResult{}, err
+		}
+		if err := d.sidecar.dispatchWorkflow(ctx, d.req.Repository, d.req.Workflow, ref, inputs); err != nil {
 			return internal.EphemeralRunnerJobResult{}, err
 		}
 	}
@@ -261,6 +269,27 @@ func (d *runnerDriver) RunGitHubJob(ctx context.Context, mode internal.Ephemeral
 		Labels:        append([]string(nil), spec.Labels...),
 		CleanupStatus: "removed",
 	}, nil
+}
+
+func (d *runnerDriver) workflowDispatchInputs(spec internal.EphemeralRunnerJobSpec) (map[string]string, error) {
+	inputs := make(map[string]string, len(d.req.WorkflowInputs)+5)
+	for key, value := range d.req.WorkflowInputs {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		inputs[key] = value
+	}
+	labels, err := json.Marshal(spec.Labels)
+	if err != nil {
+		return nil, fmt.Errorf("marshal workflow runner labels: %w", err)
+	}
+	inputs["runner_profile"] = "provider"
+	inputs["allow_github_hosted_fallback"] = "false"
+	inputs["runner_labels_json"] = string(labels)
+	inputs["stg_task_id"] = d.req.TaskID
+	inputs["workflow_compute_provider_task"] = d.req.TaskID
+	return inputs, nil
 }
 
 func (d *runnerDriver) RemoveOrgRunner(ctx context.Context, organization string, runnerID int64) error {
