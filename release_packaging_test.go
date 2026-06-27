@@ -91,6 +91,52 @@ func TestReleasePublishesGitHubActionsRunnerJobImage(t *testing.T) {
 	}
 }
 
+func TestGitHubActionsRunnerJobImageCarriesCompressedRunnerArchive(t *testing.T) {
+	data, err := os.ReadFile("cmd/github-actions-runner-job/Dockerfile")
+	if err != nil {
+		t.Fatalf("read runner job Dockerfile: %v", err)
+	}
+	dockerfile := string(data)
+	if strings.Contains(dockerfile, "ghcr.io/actions/actions-runner") {
+		t.Fatal("runner job image must not inherit the expanded actions-runner image; docker save exceeds workflow-compute package limits")
+	}
+	for _, want := range []string{
+		"ARG ACTIONS_RUNNER_VERSION=",
+		"curl --fail --show-error --location --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15",
+		"actions-runner-linux-${runner_arch}-${ACTIONS_RUNNER_VERSION}.tar.gz",
+		`x64) runner_sha256="18f8f68ed1892854ff2ab1bab4fcaa2f5abeedc98093b6cb13638991725cab74"`,
+		`arm64) runner_sha256="69ac7e5692f877189e7dddf4a1bb16cbbd6425568cd69a0359895fac48b9ad3b"`,
+		`echo "${runner_sha256}  /opt/actions-runner/actions-runner.tar.gz" | sha256sum -c -`,
+		"tar -tzf /opt/actions-runner/actions-runner.tar.gz ./config.sh ./run.sh >/dev/null",
+		"GITHUB_ACTIONS_RUNNER_ARCHIVE=/opt/actions-runner/actions-runner.tar.gz",
+		"GITHUB_ACTIONS_RUNNER_DIR=/home/runner/actions-runner",
+		"COPY --chmod=0755 cmd/github-actions-runner-job/entrypoint.sh /usr/local/bin/github-actions-runner-job-entrypoint",
+		`ENTRYPOINT ["/usr/local/bin/github-actions-runner-job-entrypoint"]`,
+	} {
+		if !strings.Contains(dockerfile, want) {
+			t.Fatalf("runner job Dockerfile must include %q", want)
+		}
+	}
+
+	entrypoint, err := os.ReadFile("cmd/github-actions-runner-job/entrypoint.sh")
+	if err != nil {
+		t.Fatalf("read runner job entrypoint: %v", err)
+	}
+	entrypointText := string(entrypoint)
+	for _, want := range []string{
+		"${GITHUB_ACTIONS_RUNNER_ARCHIVE:-/opt/actions-runner/actions-runner.tar.gz}",
+		"${GITHUB_ACTIONS_RUNNER_DIR:-/home/runner/actions-runner}",
+		`[ ! -f "$archive" ]`,
+		"runner archive not found",
+		`tar --no-same-owner -xzf "$archive" -C "$runner_dir"`,
+		`exec /usr/local/bin/github-actions-runner-job "$@"`,
+	} {
+		if !strings.Contains(entrypointText, want) {
+			t.Fatalf("runner job entrypoint must include %q", want)
+		}
+	}
+}
+
 func TestReleaseArchiveCheckRejectsProviderBuildOutsideArchive(t *testing.T) {
 	config := `
 builds:
