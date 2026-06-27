@@ -24,6 +24,34 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 			_, _ = w.Write([]byte(`{"token":"runner-registration-token","expires_at":"2026-06-26T22:00:00Z"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/dispatches":
 			dispatchCalls++
+			var body struct {
+				Ref    string            `json:"ref"`
+				Inputs map[string]string `json:"inputs"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode dispatch body: %v", err)
+			}
+			if body.Ref != "main" {
+				t.Fatalf("dispatch ref: got %q", body.Ref)
+			}
+			wantLabels := `["self-hosted","linux","wfc-stg-ghp-linux-01234567-abcdef98","wfc-ghp-stg","wfc-ghp-ephemeral"]`
+			for key, want := range map[string]string{
+				"runner_profile":                 "provider",
+				"allow_github_hosted_fallback":   "false",
+				"runner_labels_json":             wantLabels,
+				"stg_task_id":                    "task-abcdef9876543210",
+				"workflow_compute_provider_task": "task-abcdef9876543210",
+				"custom":                         "kept",
+			} {
+				if got := body.Inputs[key]; got != want {
+					t.Fatalf("dispatch input %s: got %q want %q; body=%#v", key, got, want, body.Inputs)
+				}
+			}
+			for _, forbidden := range []string{"Runner_Profile", "ALLOW_GITHUB_HOSTED_FALLBACK", "Custom"} {
+				if _, ok := body.Inputs[forbidden]; ok {
+					t.Fatalf("dispatch inputs must normalize caller keys, found %q in %#v", forbidden, body.Inputs)
+				}
+			}
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodDelete && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/42":
 			deleteCalls++
@@ -60,7 +88,8 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 	    "repository":"GoCodeAlone/workflow-compute",
 	    "workflow":"dogfood.yml",
 	    "ref":"main",
-	    "runner_group":"ephemeral"
+	    "runner_group":"ephemeral",
+	    "workflow_inputs":{"Custom":"kept","Runner_Profile":"manual","ALLOW_GITHUB_HOSTED_FALLBACK":"true"}
 	  }
 	}`)
 	var stdout, stderr bytes.Buffer
