@@ -47,6 +47,11 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 					t.Fatalf("dispatch input %s: got %q want %q; body=%#v", key, got, want, body.Inputs)
 				}
 			}
+			for _, forbidden := range []string{"Runner_Profile", "ALLOW_GITHUB_HOSTED_FALLBACK", "Custom"} {
+				if _, ok := body.Inputs[forbidden]; ok {
+					t.Fatalf("dispatch inputs must normalize caller keys, found %q in %#v", forbidden, body.Inputs)
+				}
+			}
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodDelete && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/42":
 			deleteCalls++
@@ -84,7 +89,7 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 	    "workflow":"dogfood.yml",
 	    "ref":"main",
 	    "runner_group":"ephemeral",
-	    "workflow_inputs":{"custom":"kept"}
+	    "workflow_inputs":{"Custom":"kept","Runner_Profile":"manual","ALLOW_GITHUB_HOSTED_FALLBACK":"true"}
 	  }
 	}`)
 	var stdout, stderr bytes.Buffer

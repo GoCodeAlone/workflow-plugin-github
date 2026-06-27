@@ -934,7 +934,7 @@ func stringMapArg(value any) map[string]string {
 	case map[string]string:
 		out := make(map[string]string, len(v))
 		for key, val := range v {
-			key = strings.TrimSpace(key)
+			key = strings.ToLower(strings.TrimSpace(key))
 			if key != "" {
 				out[key] = val
 			}
@@ -943,7 +943,7 @@ func stringMapArg(value any) map[string]string {
 	case map[string]any:
 		out := make(map[string]string, len(v))
 		for key, val := range v {
-			key = strings.TrimSpace(key)
+			key = strings.ToLower(strings.TrimSpace(key))
 			if key == "" {
 				continue
 			}

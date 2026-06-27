@@ -274,7 +274,7 @@ func (d *runnerDriver) RunGitHubJob(ctx context.Context, mode internal.Ephemeral
 func (d *runnerDriver) workflowDispatchInputs(spec internal.EphemeralRunnerJobSpec) (map[string]string, error) {
 	inputs := make(map[string]string, len(d.req.WorkflowInputs)+5)
 	for key, value := range d.req.WorkflowInputs {
-		key = strings.TrimSpace(key)
+		key = strings.ToLower(strings.TrimSpace(key))
 		if key == "" {
 			continue
 		}
