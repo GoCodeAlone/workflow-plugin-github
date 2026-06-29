@@ -2,7 +2,7 @@
 set -euo pipefail
 
 archive="${GITHUB_ACTIONS_RUNNER_ARCHIVE:-/opt/actions-runner/actions-runner.tar.gz}"
-runner_dir="${GITHUB_ACTIONS_RUNNER_DIR:-/home/runner/actions-runner}"
+runner_dir="${GITHUB_ACTIONS_RUNNER_DIR:-/workspace/.github-actions-runner}"
 
 if [ ! -f "$archive" ]; then
   echo "github-actions-runner-job: runner archive not found at $archive" >&2
@@ -10,6 +10,7 @@ if [ ! -f "$archive" ]; then
 fi
 
 if [ ! -x "$runner_dir/config.sh" ]; then
+  mkdir -p "$(dirname "$runner_dir")"
   mkdir -p "$runner_dir"
   tar --no-same-owner -xzf "$archive" -C "$runner_dir"
 fi

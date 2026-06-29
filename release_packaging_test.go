@@ -108,8 +108,11 @@ func TestGitHubActionsRunnerJobImageCarriesCompressedRunnerArchive(t *testing.T)
 		`arm64) runner_sha256="69ac7e5692f877189e7dddf4a1bb16cbbd6425568cd69a0359895fac48b9ad3b"`,
 		`echo "${runner_sha256}  /opt/actions-runner/actions-runner.tar.gz" | sha256sum -c -`,
 		"tar -tzf /opt/actions-runner/actions-runner.tar.gz ./config.sh ./run.sh >/dev/null",
+		"mkdir -p /workspace",
+		"chown runner:runner /workspace",
 		"GITHUB_ACTIONS_RUNNER_ARCHIVE=/opt/actions-runner/actions-runner.tar.gz",
-		"GITHUB_ACTIONS_RUNNER_DIR=/home/runner/actions-runner",
+		"GITHUB_ACTIONS_RUNNER_DIR=/workspace/.github-actions-runner",
+		"WORKDIR /workspace",
 		"COPY --chmod=0755 cmd/github-actions-runner-job/entrypoint.sh /usr/local/bin/github-actions-runner-job-entrypoint",
 		`ENTRYPOINT ["/usr/local/bin/github-actions-runner-job-entrypoint"]`,
 	} {
@@ -125,15 +128,21 @@ func TestGitHubActionsRunnerJobImageCarriesCompressedRunnerArchive(t *testing.T)
 	entrypointText := string(entrypoint)
 	for _, want := range []string{
 		"${GITHUB_ACTIONS_RUNNER_ARCHIVE:-/opt/actions-runner/actions-runner.tar.gz}",
-		"${GITHUB_ACTIONS_RUNNER_DIR:-/home/runner/actions-runner}",
+		"${GITHUB_ACTIONS_RUNNER_DIR:-/workspace/.github-actions-runner}",
 		`[ ! -f "$archive" ]`,
 		"runner archive not found",
+		`mkdir -p "$(dirname "$runner_dir")"`,
 		`tar --no-same-owner -xzf "$archive" -C "$runner_dir"`,
 		`exec /usr/local/bin/github-actions-runner-job "$@"`,
 	} {
 		if !strings.Contains(entrypointText, want) {
 			t.Fatalf("runner job entrypoint must include %q", want)
 		}
+	}
+	if strings.Contains(dockerfile, "WORKDIR /home/runner") ||
+		strings.Contains(dockerfile, "GITHUB_ACTIONS_RUNNER_DIR=/home/runner/actions-runner") ||
+		strings.Contains(entrypointText, "GITHUB_ACTIONS_RUNNER_DIR:-/home/runner/actions-runner") {
+		t.Fatal("runner job image must extract the runner under the writable /workspace mount, not /home/runner")
 	}
 }
 
