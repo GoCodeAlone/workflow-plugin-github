@@ -29,7 +29,7 @@ COPY --chmod=0755 ${RUNNER_JOB_BINARY} /usr/local/bin/github-actions-runner-job
 COPY --chmod=0755 cmd/github-actions-runner-job/entrypoint.sh /usr/local/bin/github-actions-runner-job-entrypoint
 
 USER runner
-WORKDIR /home/runner
+WORKDIR /workspace
 ENV GITHUB_ACTIONS_RUNNER_ARCHIVE=/opt/actions-runner/actions-runner.tar.gz
-ENV GITHUB_ACTIONS_RUNNER_DIR=/home/runner/actions-runner
+ENV GITHUB_ACTIONS_RUNNER_DIR=/workspace/.github-actions-runner
 ENTRYPOINT ["/usr/local/bin/github-actions-runner-job-entrypoint"]
