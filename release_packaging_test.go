@@ -108,6 +108,8 @@ func TestGitHubActionsRunnerJobImageCarriesCompressedRunnerArchive(t *testing.T)
 		`arm64) runner_sha256="69ac7e5692f877189e7dddf4a1bb16cbbd6425568cd69a0359895fac48b9ad3b"`,
 		`echo "${runner_sha256}  /opt/actions-runner/actions-runner.tar.gz" | sha256sum -c -`,
 		"tar -tzf /opt/actions-runner/actions-runner.tar.gz ./config.sh ./run.sh >/dev/null",
+		"mkdir -p /workspace",
+		"chown runner:runner /workspace",
 		"GITHUB_ACTIONS_RUNNER_ARCHIVE=/opt/actions-runner/actions-runner.tar.gz",
 		"GITHUB_ACTIONS_RUNNER_DIR=/workspace/.github-actions-runner",
 		"WORKDIR /workspace",

@@ -23,7 +23,9 @@ RUN set -eux; \
   echo "${runner_sha256}  /opt/actions-runner/actions-runner.tar.gz" | sha256sum -c -; \
   tar -tzf /opt/actions-runner/actions-runner.tar.gz ./config.sh ./run.sh >/dev/null; \
   chmod 0644 /opt/actions-runner/actions-runner.tar.gz; \
-  useradd -m -s /bin/bash runner
+  useradd -m -s /bin/bash runner; \
+  mkdir -p /workspace; \
+  chown runner:runner /workspace
 
 COPY --chmod=0755 ${RUNNER_JOB_BINARY} /usr/local/bin/github-actions-runner-job
 COPY --chmod=0755 cmd/github-actions-runner-job/entrypoint.sh /usr/local/bin/github-actions-runner-job-entrypoint
