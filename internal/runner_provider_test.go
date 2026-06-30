@@ -133,6 +133,50 @@ func TestT915_GitHubRunnerClientDispatchesWorkflow(t *testing.T) {
 	}
 }
 
+func TestT915_GitHubRunnerClientListsWorkflowRunsAndJobs(t *testing.T) {
+	var sawCreatedFilter bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer github-token" {
+			t.Fatalf("authorization header: got %q", r.Header.Get("Authorization"))
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/GoCodeAlone/workflow-compute/actions/workflows/dogfood.yml/runs":
+			if r.URL.Query().Get("event") != "workflow_dispatch" {
+				t.Fatalf("event query: %q", r.URL.RawQuery)
+			}
+			if strings.HasPrefix(r.URL.Query().Get("created"), ">=") {
+				sawCreatedFilter = true
+			}
+			writeRunnerProviderJSON(t, w, http.StatusOK, map[string]any{
+				"workflow_runs": []map[string]any{{"id": 28449657934, "status": "completed", "conclusion": "success"}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/GoCodeAlone/workflow-compute/actions/runs/28449657934/jobs":
+			writeRunnerProviderJSON(t, w, http.StatusOK, map[string]any{
+				"jobs": []map[string]any{{"id": 84308154551, "status": "completed", "conclusion": "success", "runner_name": "wfc-stg-ghp-linux-260629fabb6f-1352329e8d5b"}},
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client := &httpGitHubRunnerClient{baseURL: server.URL, httpClient: server.Client()}
+	runs, err := client.ListWorkflowRuns(context.Background(), "GoCodeAlone", "workflow-compute", "dogfood.yml", time.Date(2026, 6, 30, 13, 53, 30, 0, time.UTC), "github-token")
+	if err != nil {
+		t.Fatalf("list workflow runs: %v", err)
+	}
+	if !sawCreatedFilter || len(runs) != 1 || runs[0].ID != 28449657934 {
+		t.Fatalf("runs=%+v sawCreatedFilter=%v", runs, sawCreatedFilter)
+	}
+	jobs, err := client.ListWorkflowRunJobs(context.Background(), "GoCodeAlone", "workflow-compute", 28449657934, "github-token")
+	if err != nil {
+		t.Fatalf("list workflow jobs: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].ID != 84308154551 || jobs[0].RunnerName == "" || jobs[0].RunID != 28449657934 {
+		t.Fatalf("jobs=%+v", jobs)
+	}
+}
+
 func TestT915_GitHubRunnerClientTreatsMissingRunnerAsRemoved(t *testing.T) {
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -389,6 +433,69 @@ func TestT915_GitHubRunnerProviderHTTPDispatchesWorkflow(t *testing.T) {
 	}
 }
 
+func TestT915_GitHubRunnerProviderModuleListsWorkflowRunsFromRFC3339Arg(t *testing.T) {
+	createdAfter := "2026-06-30T13:52:30Z"
+	fake := &fakeRunnerClient{
+		workflowRuns: []GitHubWorkflowRun{{ID: 28449657934, Status: "completed", Conclusion: "success"}},
+	}
+	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
+		"token":          "github-token",
+		"provider_token": "provider-token",
+		"repositories":   []any{"GoCodeAlone/workflow-compute"},
+	}, fake)
+	if err != nil {
+		t.Fatalf("module: %v", err)
+	}
+
+	result, err := module.InvokeMethod("workflow_runs", map[string]any{
+		"repository":     "GoCodeAlone/workflow-compute",
+		"workflow":       "dogfood-provider-target.yml",
+		"created_after":  createdAfter,
+		"provider_token": "provider-token",
+	})
+	if err != nil {
+		t.Fatalf("invoke workflow_runs: %v", err)
+	}
+	runs, ok := result["workflow_runs"].([]GitHubWorkflowRun)
+	if !ok || len(runs) != 1 || runs[0].ID != 28449657934 {
+		t.Fatalf("workflow_runs output: got %+v", result)
+	}
+	if fake.listRunsRepository != "GoCodeAlone/workflow-compute" || fake.listRunsWorkflow != "dogfood-provider-target.yml" {
+		t.Fatalf("list runs tracking: repo=%q workflow=%q", fake.listRunsRepository, fake.listRunsWorkflow)
+	}
+	wantCreatedAfter, err := time.Parse(time.RFC3339, createdAfter)
+	if err != nil {
+		t.Fatalf("parse test timestamp: %v", err)
+	}
+	if !fake.listRunsCreatedAfter.Equal(wantCreatedAfter) {
+		t.Fatalf("created_after: got %s want %s", fake.listRunsCreatedAfter.Format(time.RFC3339), wantCreatedAfter.Format(time.RFC3339))
+	}
+	if fake.dispatchedRepository != "" || fake.dispatchedWorkflow != "" {
+		t.Fatalf("list runs mutated dispatch tracking: repo=%q workflow=%q", fake.dispatchedRepository, fake.dispatchedWorkflow)
+	}
+}
+
+func TestT915_GitHubRunnerProviderModuleRejectsInvalidCreatedAfterArg(t *testing.T) {
+	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
+		"token":          "github-token",
+		"provider_token": "provider-token",
+		"repositories":   []any{"GoCodeAlone/workflow-compute"},
+	}, &fakeRunnerClient{})
+	if err != nil {
+		t.Fatalf("module: %v", err)
+	}
+
+	_, err = module.InvokeMethod("workflow_runs", map[string]any{
+		"repository":     "GoCodeAlone/workflow-compute",
+		"workflow":       "dogfood-provider-target.yml",
+		"created_after":  123,
+		"provider_token": "provider-token",
+	})
+	if err == nil || !strings.Contains(err.Error(), "created_after must be RFC3339") {
+		t.Fatalf("expected created_after validation error, got %v", err)
+	}
+}
+
 func TestT593_GitHubRunnerProviderModuleRejectsRepositoryTokenWithoutRepositoryAllowlist(t *testing.T) {
 	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
 		"token":          "github-token",
@@ -595,6 +702,13 @@ type fakeRunnerClient struct {
 	dispatchedWorkflow          string
 	dispatchedRef               string
 	dispatchedInputs            map[string]string
+	listRunsRepository          string
+	listRunsWorkflow            string
+	listRunsCreatedAfter        time.Time
+	listJobsRepository          string
+	listJobsRunID               int64
+	workflowRuns                []GitHubWorkflowRun
+	workflowJobs                []GitHubWorkflowJob
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -655,6 +769,24 @@ func (f *fakeRunnerClient) DispatchWorkflow(_ context.Context, owner, repo, work
 	f.dispatchedRef = ref
 	f.dispatchedInputs = inputs
 	return nil
+}
+
+func (f *fakeRunnerClient) ListWorkflowRuns(_ context.Context, owner, repo, workflow string, createdAfter time.Time, _ string) ([]GitHubWorkflowRun, error) {
+	f.listRunsRepository = owner + "/" + repo
+	f.listRunsWorkflow = workflow
+	f.listRunsCreatedAfter = createdAfter
+	return f.workflowRuns, nil
+}
+
+func (f *fakeRunnerClient) ListWorkflowRunJobs(_ context.Context, owner, repo string, runID int64, _ string) ([]GitHubWorkflowJob, error) {
+	f.listJobsRepository = owner + "/" + repo
+	f.listJobsRunID = runID
+	for i := range f.workflowJobs {
+		if f.workflowJobs[i].RunID == 0 {
+			f.workflowJobs[i].RunID = runID
+		}
+	}
+	return f.workflowJobs, nil
 }
 
 func writeRunnerProviderJSON(t *testing.T, w http.ResponseWriter, status int, v any) {

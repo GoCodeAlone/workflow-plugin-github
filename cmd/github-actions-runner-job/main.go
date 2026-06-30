@@ -27,6 +27,8 @@ const (
 	defaultRunnerJobTimeout = 30 * time.Minute
 )
 
+var githubJobPollInterval = 5 * time.Second
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "github-actions-runner-job failed: %v\n", err)
@@ -190,6 +192,43 @@ func (c *providerSidecarClient) dispatchWorkflow(ctx context.Context, repository
 	return c.do(ctx, http.MethodPost, path, body, http.StatusNoContent, nil)
 }
 
+func (c *providerSidecarClient) workflowRuns(ctx context.Context, repository, workflow string, createdAfter time.Time) ([]internal.GitHubWorkflowRun, error) {
+	owner, repo, err := splitRepository(repository)
+	if err != nil {
+		return nil, err
+	}
+	path := "/v1/actions/repos/" + url.PathEscape(owner) + "/" + url.PathEscape(repo) + "/workflows/" + url.PathEscape(workflow) + "/runs"
+	query := url.Values{}
+	if !createdAfter.IsZero() {
+		query.Set("created_after", createdAfter.UTC().Format(time.RFC3339))
+	}
+	if encoded := query.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	var out struct {
+		WorkflowRuns []internal.GitHubWorkflowRun `json:"workflow_runs"`
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return out.WorkflowRuns, nil
+}
+
+func (c *providerSidecarClient) workflowRunJobs(ctx context.Context, repository string, runID int64) ([]internal.GitHubWorkflowJob, error) {
+	owner, repo, err := splitRepository(repository)
+	if err != nil {
+		return nil, err
+	}
+	path := fmt.Sprintf("/v1/actions/repos/%s/%s/actions/runs/%d/jobs", url.PathEscape(owner), url.PathEscape(repo), runID)
+	var out struct {
+		Jobs []internal.GitHubWorkflowJob `json:"jobs"`
+	}
+	if err := c.do(ctx, http.MethodGet, path, nil, http.StatusOK, &out); err != nil {
+		return nil, err
+	}
+	return out.Jobs, nil
+}
+
 func (c *providerSidecarClient) removeOrgRunner(ctx context.Context, organization string, runnerID int64) error {
 	path := fmt.Sprintf("/v1/actions/orgs/%s/runners/%d", url.PathEscape(organization), runnerID)
 	return c.do(ctx, http.MethodDelete, path, nil, http.StatusNoContent, nil)
@@ -280,12 +319,20 @@ func (d *runnerDriver) RunGitHubJob(ctx context.Context, mode internal.Ephemeral
 		if err != nil {
 			return result, err
 		}
+		dispatchedAfter := time.Now().UTC().Add(-10 * time.Second)
 		if err := d.sidecar.dispatchWorkflow(ctx, d.req.Repository, d.req.Workflow, dispatchRef, dispatchInputs); err != nil {
 			runner.cancel()
 			_ = runner.wait()
 			return result, err
 		}
-		if err := runner.waitForGitHubJob(ctx); err != nil {
+		completion, err := d.waitForGitHubCompletion(ctx, runner, spec.RunnerName, dispatchedAfter)
+		if completion.WorkflowRunID != 0 {
+			result.WorkflowRunID = completion.WorkflowRunID
+		}
+		if completion.WorkflowJobID != 0 {
+			result.WorkflowJobID = completion.WorkflowJobID
+		}
+		if err != nil {
 			return result, err
 		}
 		return result, nil
@@ -315,6 +362,110 @@ func (d *runnerDriver) workflowDispatchInputs(spec internal.EphemeralRunnerJobSp
 	inputs["stg_task_id"] = d.req.TaskID
 	inputs["workflow_compute_provider_task"] = d.req.TaskID
 	return inputs, nil
+}
+
+type githubJobCompletion struct {
+	WorkflowRunID int64
+	WorkflowJobID int64
+	Success       bool
+	Terminal      bool
+	Message       string
+}
+
+func (d *runnerDriver) waitForGitHubCompletion(ctx context.Context, runner *runningCommand, runnerName string, dispatchedAfter time.Time) (githubJobCompletion, error) {
+	ticker := time.NewTicker(githubJobPollInterval)
+	defer ticker.Stop()
+	var last githubJobCompletion
+	for {
+		select {
+		case err := <-runner.done:
+			runner.cancel()
+			if err != nil {
+				return last, fmt.Errorf("%s failed: %w: %s", filepath.Base(runner.path), err, runner.output())
+			}
+			if completion, err := d.observeGitHubJob(ctx, runnerName, dispatchedAfter); err == nil && completion.WorkflowRunID != 0 {
+				if completion.Terminal && !completion.Success {
+					return completion, fmt.Errorf("github workflow job failed: %s", completion.Message)
+				}
+				return completion, nil
+			}
+			return last, nil
+		case result := <-runner.result:
+			runner.cancel()
+			err := <-runner.done
+			if result.success {
+				if completion, observeErr := d.observeGitHubJob(ctx, runnerName, dispatchedAfter); observeErr == nil && completion.WorkflowRunID != 0 {
+					if completion.Terminal && !completion.Success {
+						return completion, fmt.Errorf("github workflow job failed after success marker: %s", completion.Message)
+					}
+					return completion, nil
+				}
+				return last, nil
+			}
+			if err != nil {
+				return last, fmt.Errorf("%s reported failed job and exited with %w: %s", filepath.Base(runner.path), err, result.line)
+			}
+			return last, fmt.Errorf("%s reported failed job: %s", filepath.Base(runner.path), result.line)
+		case <-ticker.C:
+			completion, err := d.observeGitHubJob(ctx, runnerName, dispatchedAfter)
+			if err != nil {
+				return last, err
+			}
+			if completion.WorkflowRunID != 0 {
+				last = completion
+			}
+			if !completion.Terminal {
+				continue
+			}
+			runner.cancel()
+			_ = <-runner.done
+			if completion.Success {
+				return completion, nil
+			}
+			return completion, fmt.Errorf("github workflow job failed: %s", completion.Message)
+		case <-ctx.Done():
+			runner.cancel()
+			err := <-runner.done
+			if err != nil {
+				return last, fmt.Errorf("%s timed out waiting for GitHub job completion: %w: %s", filepath.Base(runner.path), ctx.Err(), runner.output())
+			}
+			return last, ctx.Err()
+		}
+	}
+}
+
+func (d *runnerDriver) observeGitHubJob(ctx context.Context, runnerName string, dispatchedAfter time.Time) (githubJobCompletion, error) {
+	runs, err := d.sidecar.workflowRuns(ctx, d.req.Repository, d.req.Workflow, dispatchedAfter)
+	if err != nil {
+		return githubJobCompletion{}, err
+	}
+	for _, run := range runs {
+		jobs, err := d.sidecar.workflowRunJobs(ctx, d.req.Repository, run.ID)
+		if err != nil {
+			return githubJobCompletion{}, err
+		}
+		for _, job := range jobs {
+			if strings.TrimSpace(job.RunnerName) != runnerName {
+				continue
+			}
+			completion := githubJobCompletion{
+				WorkflowRunID: run.ID,
+				WorkflowJobID: job.ID,
+				Message:       fmt.Sprintf("run=%d job=%d status=%s conclusion=%s runner=%s", run.ID, job.ID, job.Status, job.Conclusion, job.RunnerName),
+			}
+			if !strings.EqualFold(job.Status, "completed") && !strings.EqualFold(run.Status, "completed") {
+				return completion, nil
+			}
+			completion.Terminal = true
+			conclusion := strings.ToLower(strings.TrimSpace(job.Conclusion))
+			if conclusion == "" {
+				conclusion = strings.ToLower(strings.TrimSpace(run.Conclusion))
+			}
+			completion.Success = conclusion == "success" || conclusion == "succeeded"
+			return completion, nil
+		}
+	}
+	return githubJobCompletion{}, nil
 }
 
 func (d *runnerDriver) RemoveOrgRunner(ctx context.Context, organization string, runnerID int64) error {
