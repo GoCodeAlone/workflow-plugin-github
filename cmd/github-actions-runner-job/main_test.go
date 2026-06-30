@@ -404,6 +404,163 @@ func TestT915CommandRejectsFailedGitHubJobAPICompletion(t *testing.T) {
 	}
 }
 
+func TestT915CommandRejectsRunnerExitBeforeGitHubJobTerminal(t *testing.T) {
+	oldPoll := githubJobPollInterval
+	githubJobPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { githubJobPollInterval = oldPoll })
+
+	workspace := t.TempDir()
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/registration-token":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"token":"runner-registration-token","expires_at":"2026-06-26T22:00:00Z"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/dispatches":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/runs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":28454875323,"status":"in_progress"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/actions/runs/28454875323/jobs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jobs":[{"id":84326797950,"run_id":28454875323,"status":"in_progress","runner_name":"wfc-stg-ghp-linux-abcdef987249-543210f71ee4"}]}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/42":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+
+	runnerDir := t.TempDir()
+	writeExecutable(t, filepath.Join(runnerDir, "config.sh"), "#!/bin/sh\nprintf '{\"agentId\":42}\\n' > .runner\n")
+	writeExecutable(t, filepath.Join(runnerDir, "run.sh"), "#!/bin/sh\nexit 0\n")
+	t.Chdir(workspace)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", sidecar.URL)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "provider-token")
+	t.Setenv("GITHUB_ACTIONS_RUNNER_DIR", runnerDir)
+	t.Setenv("GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR", workspace)
+
+	input := strings.NewReader(`{
+	  "protocol_version":"compute.v1alpha1",
+	  "task_id":"task-abcdef9876543210",
+	  "lease_id":"lease-1",
+	  "provider_config":{"plugin_id":"workflow-plugin-github","provider_id":"github-actions-runner"},
+	  "operation":"ephemeral_runner_job",
+	  "input":{
+	    "mode":"dispatch_then_wait",
+	    "environment":"stg",
+	    "os":"linux",
+	    "worker_id":"worker-0123456789abcdef",
+	    "task_id":"task-abcdef9876543210",
+	    "organization":"GoCodeAlone",
+	    "repository":"GoCodeAlone/workflow-compute",
+	    "workflow":"dogfood.yml",
+	    "ref":"main",
+	    "runner_group":"ephemeral",
+	    "timeout_seconds":2
+	  }
+	}`)
+	var stdout, stderr bytes.Buffer
+	err := runWithIO([]string{}, input, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "exited before GitHub workflow job completed") {
+		t.Fatalf("expected non-terminal runner exit error, got %v\nstderr:\n%s", err, stderr.String())
+	}
+	proof := readFile(t, filepath.Join(workspace, "github-runner-proof.json"))
+	for _, want := range []string{"28454875323", "84326797950"} {
+		if !strings.Contains(proof, want) {
+			t.Fatalf("proof missing %q:\n%s", want, proof)
+		}
+	}
+}
+
+func TestT915CommandAllowsBriefGitHubJobAPICompletionLagAfterRunnerExit(t *testing.T) {
+	oldPoll := githubJobPollInterval
+	githubJobPollInterval = 10 * time.Millisecond
+	oldGracePolls := githubJobExitGracePolls
+	githubJobExitGracePolls = 3
+	t.Cleanup(func() {
+		githubJobPollInterval = oldPoll
+		githubJobExitGracePolls = oldGracePolls
+	})
+
+	workspace := t.TempDir()
+	var jobsCalls int
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/registration-token":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"token":"runner-registration-token","expires_at":"2026-06-26T22:00:00Z"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/dispatches":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/runs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":28454875324,"status":"in_progress"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/actions/runs/28454875324/jobs":
+			jobsCalls++
+			w.WriteHeader(http.StatusOK)
+			if jobsCalls == 1 {
+				_, _ = w.Write([]byte(`{"jobs":[{"id":84326797951,"run_id":28454875324,"status":"in_progress","runner_name":"wfc-stg-ghp-linux-abcdef987249-543210f71ee4"}]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"jobs":[{"id":84326797951,"run_id":28454875324,"status":"completed","conclusion":"success","runner_name":"wfc-stg-ghp-linux-abcdef987249-543210f71ee4"}]}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/42":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+
+	runnerDir := t.TempDir()
+	writeExecutable(t, filepath.Join(runnerDir, "config.sh"), "#!/bin/sh\nprintf '{\"agentId\":42}\\n' > .runner\n")
+	writeExecutable(t, filepath.Join(runnerDir, "run.sh"), "#!/bin/sh\nexit 0\n")
+	t.Chdir(workspace)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", sidecar.URL)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "provider-token")
+	t.Setenv("GITHUB_ACTIONS_RUNNER_DIR", runnerDir)
+	t.Setenv("GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR", workspace)
+
+	input := strings.NewReader(`{
+	  "protocol_version":"compute.v1alpha1",
+	  "task_id":"task-abcdef9876543210",
+	  "lease_id":"lease-1",
+	  "provider_config":{"plugin_id":"workflow-plugin-github","provider_id":"github-actions-runner"},
+	  "operation":"ephemeral_runner_job",
+	  "input":{
+	    "mode":"dispatch_then_wait",
+	    "environment":"stg",
+	    "os":"linux",
+	    "worker_id":"worker-0123456789abcdef",
+	    "task_id":"task-abcdef9876543210",
+	    "organization":"GoCodeAlone",
+	    "repository":"GoCodeAlone/workflow-compute",
+	    "workflow":"dogfood.yml",
+	    "ref":"main",
+	    "runner_group":"ephemeral",
+	    "timeout_seconds":2
+	  }
+	}`)
+	var stdout, stderr bytes.Buffer
+	if err := runWithIO([]string{}, input, &stdout, &stderr); err != nil {
+		t.Fatalf("run dynamic provider: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if jobsCalls < 2 {
+		t.Fatalf("expected retry after non-terminal observation, jobsCalls=%d", jobsCalls)
+	}
+	proof := readFile(t, filepath.Join(workspace, "github-runner-proof.json"))
+	for _, want := range []string{"28454875324", "84326797951"} {
+		if !strings.Contains(proof, want) {
+			t.Fatalf("proof missing %q:\n%s", want, proof)
+		}
+	}
+}
+
 func TestT915RunnerCompletionMarkerRejectsFailedJob(t *testing.T) {
 	for _, line := range []string{
 		"2026-06-30T12:58:48Z: Job provider-target completed with result: Failed",

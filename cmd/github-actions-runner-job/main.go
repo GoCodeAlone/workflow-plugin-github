@@ -28,6 +28,7 @@ const (
 )
 
 var githubJobPollInterval = 5 * time.Second
+var githubJobExitGracePolls = 3
 
 func main() {
 	if err := run(); err != nil {
@@ -383,7 +384,10 @@ func (d *runnerDriver) waitForGitHubCompletion(ctx context.Context, runner *runn
 			if err != nil {
 				return last, fmt.Errorf("%s failed: %w: %s", filepath.Base(runner.path), err, runner.output())
 			}
-			if completion, err := d.observeGitHubJob(ctx, runnerName, dispatchedAfter); err == nil && completion.WorkflowRunID != 0 {
+			if completion, err := d.observeTerminalGitHubJob(ctx, runnerName, dispatchedAfter, githubJobExitGracePolls); err == nil && completion.WorkflowRunID != 0 {
+				if !completion.Terminal {
+					return completion, fmt.Errorf("%s exited before GitHub workflow job completed: %s", filepath.Base(runner.path), completion.Message)
+				}
 				if completion.Terminal && !completion.Success {
 					return completion, fmt.Errorf("github workflow job failed: %s", completion.Message)
 				}
@@ -432,6 +436,41 @@ func (d *runnerDriver) waitForGitHubCompletion(ctx context.Context, runner *runn
 			return last, ctx.Err()
 		}
 	}
+}
+
+func (d *runnerDriver) observeTerminalGitHubJob(ctx context.Context, runnerName string, dispatchedAfter time.Time, maxPolls int) (githubJobCompletion, error) {
+	if maxPolls < 1 {
+		maxPolls = 1
+	}
+	var last githubJobCompletion
+	for attempt := 0; attempt < maxPolls; attempt++ {
+		completion, err := d.observeGitHubJob(ctx, runnerName, dispatchedAfter)
+		if err != nil {
+			return last, err
+		}
+		if completion.WorkflowRunID != 0 {
+			last = completion
+			if completion.Terminal {
+				return completion, nil
+			}
+		}
+		if attempt == maxPolls-1 {
+			break
+		}
+		timer := time.NewTimer(githubJobPollInterval)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return last, ctx.Err()
+		}
+	}
+	return last, nil
 }
 
 func (d *runnerDriver) observeGitHubJob(ctx context.Context, runnerName string, dispatchedAfter time.Time) (githubJobCompletion, error) {
