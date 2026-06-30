@@ -33,6 +33,7 @@ type EphemeralRunnerJobRequest struct {
 	Ref                 string                 `json:"ref,omitempty"`
 	WorkflowInputs      map[string]string      `json:"workflow_inputs,omitempty"`
 	RunnerGroup         string                 `json:"runner_group,omitempty"`
+	TimeoutSeconds      int                    `json:"timeout_seconds,omitempty"`
 	Timeout             time.Duration          `json:"-"`
 	RequiredRuntimeCaps []string               `json:"required_runtime_caps,omitempty"`
 	AdvertisedCaps      []string               `json:"advertised_caps,omitempty"`

@@ -150,6 +150,115 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 	}
 }
 
+func TestT915CommandTreatsRunnerSuccessMarkerAsCompletion(t *testing.T) {
+	var tokenCalls, dispatchCalls, deleteCalls int
+	workspace := t.TempDir()
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/registration-token":
+			tokenCalls++
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"token":"runner-registration-token","expires_at":"2026-06-26T22:00:00Z"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/dispatches":
+			dispatchCalls++
+			for range 20 {
+				if _, err := os.Stat(filepath.Join(workspace, "run.started")); err == nil {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			if _, err := os.Stat(filepath.Join(workspace, "run.started")); err != nil {
+				http.Error(w, "runner listener was not started before dispatch", http.StatusConflict)
+				return
+			}
+			if err := os.WriteFile(filepath.Join(workspace, "dispatch.seen"), []byte("1\n"), 0o600); err != nil {
+				t.Fatalf("write dispatch marker: %v", err)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodDelete && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/42":
+			deleteCalls++
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+
+	runnerDir := t.TempDir()
+	writeExecutable(t, filepath.Join(runnerDir, "config.sh"), "#!/bin/sh\nprintf '{\"agentId\":42}\\n' > .runner\n")
+	writeExecutable(t, filepath.Join(runnerDir, "run.sh"), "#!/bin/sh\ntouch \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.started\"\nwhile [ ! -f \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/dispatch.seen\" ]; do sleep 0.1; done\nprintf '2026-06-30T12:58:48Z: Job provider-target completed with result: Succeeded\\n'\ntouch \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/success.marker\"\nwhile true; do sleep 1; done\n")
+	t.Chdir(workspace)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", sidecar.URL)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "provider-token")
+	t.Setenv("GITHUB_ACTIONS_RUNNER_DIR", runnerDir)
+	t.Setenv("GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR", workspace)
+
+	input := strings.NewReader(`{
+	  "protocol_version":"compute.v1alpha1",
+	  "task_id":"task-abcdef9876543210",
+	  "lease_id":"lease-1",
+	  "provider_config":{"plugin_id":"workflow-plugin-github","provider_id":"github-actions-runner"},
+	  "operation":"ephemeral_runner_job",
+	  "input":{
+	    "mode":"dispatch_then_wait",
+	    "environment":"stg",
+	    "os":"linux",
+	    "worker_id":"worker-0123456789abcdef",
+	    "task_id":"task-abcdef9876543210",
+	    "organization":"GoCodeAlone",
+	    "repository":"GoCodeAlone/workflow-compute",
+	    "workflow":"dogfood.yml",
+	    "ref":"main",
+	    "runner_group":"ephemeral",
+	    "timeout_seconds":2
+	  }
+	}`)
+	var stdout, stderr bytes.Buffer
+	if err := runWithIO([]string{}, input, &stdout, &stderr); err != nil {
+		t.Fatalf("run dynamic provider: %v\nstderr:\n%s", err, stderr.String())
+	}
+	if tokenCalls != 1 || dispatchCalls != 1 || deleteCalls != 1 {
+		t.Fatalf("sidecar calls: token=%d dispatch=%d delete=%d", tokenCalls, dispatchCalls, deleteCalls)
+	}
+	var result struct {
+		Artifacts []string `json:"artifacts"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("decode stdout: %v\n%s", err, stdout.String())
+	}
+	if len(result.Artifacts) != 1 || result.Artifacts[0] != "github-runner-proof.json" {
+		t.Fatalf("artifacts = %#v", result.Artifacts)
+	}
+	proof := readFile(t, filepath.Join(workspace, "github-runner-proof.json"))
+	for _, want := range []string{"wfc-stg-ghp-linux-abcdef987249-543210f71ee4", "task-abcdef9876543210", "removed"} {
+		if !strings.Contains(proof, want) {
+			t.Fatalf("proof missing %q:\n%s", want, proof)
+		}
+	}
+}
+
+func TestT915RunnerCompletionMarkerRejectsFailedJob(t *testing.T) {
+	for _, line := range []string{
+		"2026-06-30T12:58:48Z: Job provider-target completed with result: Failed",
+		"Job provider-target completed with result: Cancelled",
+	} {
+		result, ok := parseRunnerCompletion(line)
+		if !ok {
+			t.Fatalf("completion marker was not detected for %q", line)
+		}
+		if result.success {
+			t.Fatalf("failed marker treated as success: %+v", result)
+		}
+	}
+	result, ok := parseRunnerCompletion("Job provider-target completed with result: Succeeded")
+	if !ok || !result.success {
+		t.Fatalf("success marker not accepted: result=%+v ok=%v", result, ok)
+	}
+}
+
 func TestT915CommandRejectsUnknownDynamicInputFields(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := runWithIO([]string{}, strings.NewReader(`{
