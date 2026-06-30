@@ -384,6 +384,9 @@ func (d *runnerDriver) waitForGitHubCompletion(ctx context.Context, runner *runn
 				return last, fmt.Errorf("%s failed: %w: %s", filepath.Base(runner.path), err, runner.output())
 			}
 			if completion, err := d.observeGitHubJob(ctx, runnerName, dispatchedAfter); err == nil && completion.WorkflowRunID != 0 {
+				if !completion.Terminal {
+					return completion, fmt.Errorf("%s exited before GitHub workflow job completed: %s", filepath.Base(runner.path), completion.Message)
+				}
 				if completion.Terminal && !completion.Success {
 					return completion, fmt.Errorf("github workflow job failed: %s", completion.Message)
 				}
