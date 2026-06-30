@@ -75,6 +75,18 @@ func TestT594EphemeralRunnerJobSpecKeepsTimestampedDogfoodTasksUnique(t *testing
 	}
 }
 
+func TestT594ShortEphemeralIDKeepsSanitizedShortIDsUnique(t *testing.T) {
+	if got := shortEphemeralID("abcd"); got != "abcd" {
+		t.Fatalf("unchanged short ID: got %q", got)
+	}
+	if got := shortEphemeralID("ab-cd"); got != "abcd5db3d8" {
+		t.Fatalf("sanitized short ID: got %q", got)
+	}
+	if shortEphemeralID("abcd") == shortEphemeralID("ab-cd") {
+		t.Fatal("sanitized short IDs must not collide with already-safe short IDs")
+	}
+}
+
 func TestT594EphemeralRunnerJobUsesExactLabelsForDispatchAndAttachModes(t *testing.T) {
 	for _, mode := range []EphemeralRunnerJobMode{EphemeralRunnerJobModeDispatchThenWait, EphemeralRunnerJobModeAttachToQueued} {
 		t.Run(string(mode), func(t *testing.T) {

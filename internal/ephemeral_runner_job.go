@@ -182,8 +182,9 @@ func shortEphemeralID(value string) string {
 	if value == "" {
 		return ""
 	}
+	canonical := strings.ToLower(value)
 	var safe strings.Builder
-	for _, r := range strings.ToLower(value) {
+	for _, r := range canonical {
 		switch {
 		case r >= 'a' && r <= 'z':
 			safe.WriteRune(r)
@@ -195,10 +196,14 @@ func shortEphemeralID(value string) string {
 	if token == "" {
 		return ""
 	}
-	if len(token) <= 8 {
+	if len(token) <= 8 && token == canonical {
 		return token
 	}
-	sum := sha256.Sum256([]byte(strings.ToLower(value)))
+	sum := sha256.Sum256([]byte(canonical))
 	hash := hex.EncodeToString(sum[:])[:6]
-	return token[len(token)-6:] + hash
+	tail := token
+	if len(tail) > 6 {
+		tail = tail[len(tail)-6:]
+	}
+	return tail + hash
 }
