@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testing.T) {
 	var tokenCalls, dispatchCalls, deleteCalls int
+	workspace := t.TempDir()
 	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer provider-token" {
 			t.Fatalf("authorization = %q", got)
@@ -24,6 +26,17 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 			_, _ = w.Write([]byte(`{"token":"runner-registration-token","expires_at":"2026-06-26T22:00:00Z"}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/dispatches":
 			dispatchCalls++
+			runStarted := filepath.Join(workspace, "run.started")
+			for range 20 {
+				if _, err := os.Stat(runStarted); err == nil {
+					break
+				}
+				time.Sleep(50 * time.Millisecond)
+			}
+			if _, err := os.Stat(runStarted); err != nil {
+				http.Error(w, "runner listener was not started before dispatch", http.StatusConflict)
+				return
+			}
 			var body struct {
 				Ref    string            `json:"ref"`
 				Inputs map[string]string `json:"inputs"`
@@ -52,6 +65,9 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 					t.Fatalf("dispatch inputs must normalize caller keys, found %q in %#v", forbidden, body.Inputs)
 				}
 			}
+			if err := os.WriteFile(filepath.Join(workspace, "dispatch.seen"), []byte("1\n"), 0o600); err != nil {
+				t.Fatalf("write dispatch marker: %v", err)
+			}
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodDelete && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/42":
 			deleteCalls++
@@ -64,8 +80,7 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 
 	runnerDir := t.TempDir()
 	writeExecutable(t, filepath.Join(runnerDir, "config.sh"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/config.args\"\nprintf '{\"agentId\":42}\\n' > .runner\n")
-	writeExecutable(t, filepath.Join(runnerDir, "run.sh"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.args\"\nprintf 'runner executed\\n' > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.log\"\n")
-	workspace := t.TempDir()
+	writeExecutable(t, filepath.Join(runnerDir, "run.sh"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.args\"\ntouch \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.started\"\nwhile [ ! -f \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/dispatch.seen\" ]; do sleep 0.1; done\nprintf 'runner executed\\n' > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.log\"\n")
 	t.Chdir(workspace)
 	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", sidecar.URL)
 	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "provider-token")
