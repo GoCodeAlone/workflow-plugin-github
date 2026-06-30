@@ -46,16 +46,17 @@ type EphemeralRunnerJobSpec struct {
 }
 
 type EphemeralRunnerJobResult struct {
-	RunnerID      int64    `json:"runner_id"`
-	RunnerName    string   `json:"runner_name"`
-	Labels        []string `json:"labels"`
-	WorkflowRunID int64    `json:"workflow_run_id"`
-	WorkflowJobID int64    `json:"workflow_job_id"`
-	WorkerID      string   `json:"worker_id"`
-	TaskID        string   `json:"task_id"`
-	ArtifactRefs  []string `json:"artifact_refs"`
-	CleanupStatus string   `json:"cleanup_status"`
-	RedactedError string   `json:"redacted_error,omitempty"`
+	RunnerID          int64    `json:"runner_id"`
+	RunnerName        string   `json:"runner_name"`
+	Labels            []string `json:"labels"`
+	WorkflowRunID     int64    `json:"workflow_run_id"`
+	WorkflowJobID     int64    `json:"workflow_job_id"`
+	WorkflowJobStatus string   `json:"workflow_job_status,omitempty"`
+	WorkerID          string   `json:"worker_id"`
+	TaskID            string   `json:"task_id"`
+	ArtifactRefs      []string `json:"artifact_refs"`
+	CleanupStatus     string   `json:"cleanup_status"`
+	RedactedError     string   `json:"redacted_error,omitempty"`
 }
 
 type EphemeralRunnerJobDriver interface {

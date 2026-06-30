@@ -78,7 +78,10 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/runs":
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"workflow_runs":[]}`))
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":28449657934,"status":"completed","conclusion":"success"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/actions/runs/28449657934/jobs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jobs":[{"id":84308154551,"run_id":28449657934,"status":"completed","conclusion":"success","runner_name":"wfc-stg-ghp-linux-abcdef987249-543210f71ee4"}]}`))
 		default:
 			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.Path)
 		}
@@ -150,7 +153,7 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 		t.Fatalf("artifacts = %#v", result.Artifacts)
 	}
 	proof := readFile(t, filepath.Join(workspace, "github-runner-proof.json"))
-	for _, want := range []string{"wfc-stg-ghp-linux-abcdef987249-543210f71ee4", "task-abcdef9876543210", "removed"} {
+	for _, want := range []string{"wfc-stg-ghp-linux-abcdef987249-543210f71ee4", "task-abcdef9876543210", "28449657934", "84308154551", "completed", "removed"} {
 		if !strings.Contains(proof, want) {
 			t.Fatalf("proof missing %q:\n%s", want, proof)
 		}
@@ -593,6 +596,146 @@ func TestT915CommandRejectsRunnerExitBeforeGitHubJobTerminal(t *testing.T) {
 	}
 	proof := readFile(t, filepath.Join(workspace, "github-runner-proof.json"))
 	for _, want := range []string{"28454875323", "84326797950"} {
+		if !strings.Contains(proof, want) {
+			t.Fatalf("proof missing %q:\n%s", want, proof)
+		}
+	}
+}
+
+func TestT916CommandRejectsRunnerExitBeforeGitHubJobAssignment(t *testing.T) {
+	oldPoll := githubJobPollInterval
+	githubJobPollInterval = 10 * time.Millisecond
+	t.Cleanup(func() { githubJobPollInterval = oldPoll })
+
+	workspace := t.TempDir()
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/registration-token":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"token":"runner-registration-token","expires_at":"2026-06-26T22:00:00Z"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/dispatches":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/runs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":28469568301,"status":"queued"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/actions/runs/28469568301/jobs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jobs":[{"id":84378204611,"run_id":28469568301,"status":"queued","runner_name":"","labels":["self-hosted","linux","wfc-stg-ghp-linux-abcdef987249-543210f71ee4","wfc-ghp-stg","wfc-ghp-ephemeral"]}]}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/42":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+
+	runnerDir := t.TempDir()
+	writeExecutable(t, filepath.Join(runnerDir, "config.sh"), "#!/bin/sh\nprintf '{\"agentId\":42}\\n' > .runner\n")
+	writeExecutable(t, filepath.Join(runnerDir, "run.sh"), "#!/bin/sh\nexit 0\n")
+	t.Chdir(workspace)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", sidecar.URL)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "provider-token")
+	t.Setenv("GITHUB_ACTIONS_RUNNER_DIR", runnerDir)
+	t.Setenv("GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR", workspace)
+
+	input := strings.NewReader(`{
+	  "protocol_version":"compute.v1alpha1",
+	  "task_id":"task-abcdef9876543210",
+	  "lease_id":"lease-1",
+	  "provider_config":{"plugin_id":"workflow-plugin-github","provider_id":"github-actions-runner"},
+	  "operation":"ephemeral_runner_job",
+	  "input":{
+	    "mode":"dispatch_then_wait",
+	    "environment":"stg",
+	    "os":"linux",
+	    "worker_id":"worker-0123456789abcdef",
+	    "task_id":"task-abcdef9876543210",
+	    "organization":"GoCodeAlone",
+	    "repository":"GoCodeAlone/workflow-compute",
+	    "workflow":"dogfood.yml",
+	    "ref":"main",
+	    "runner_group":"ephemeral",
+	    "timeout_seconds":2
+	  }
+	}`)
+	var stdout, stderr bytes.Buffer
+	err := runWithIO([]string{}, input, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "exited before GitHub workflow job was assigned") {
+		t.Fatalf("expected unassigned runner exit error, got %v\nstderr:\n%s", err, stderr.String())
+	}
+	proof := readFile(t, filepath.Join(workspace, "github-runner-proof.json"))
+	for _, want := range []string{"28469568301", "84378204611", "queued"} {
+		if !strings.Contains(proof, want) {
+			t.Fatalf("proof missing %q:\n%s", want, proof)
+		}
+	}
+}
+
+func TestT916CommandPropagatesObservationErrorAfterRunnerExit(t *testing.T) {
+	oldPoll := githubJobPollInterval
+	githubJobPollInterval = time.Hour
+	t.Cleanup(func() { githubJobPollInterval = oldPoll })
+
+	workspace := t.TempDir()
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/registration-token":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"token":"runner-registration-token","expires_at":"2026-06-26T22:00:00Z"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/dispatches":
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/runs":
+			http.Error(w, "sidecar unavailable", http.StatusBadGateway)
+		case r.Method == http.MethodDelete && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/42":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+
+	runnerDir := t.TempDir()
+	writeExecutable(t, filepath.Join(runnerDir, "config.sh"), "#!/bin/sh\nprintf '{\"agentId\":42}\\n' > .runner\n")
+	writeExecutable(t, filepath.Join(runnerDir, "run.sh"), "#!/bin/sh\nexit 0\n")
+	t.Chdir(workspace)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", sidecar.URL)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "provider-token")
+	t.Setenv("GITHUB_ACTIONS_RUNNER_DIR", runnerDir)
+	t.Setenv("GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR", workspace)
+
+	input := strings.NewReader(`{
+	  "protocol_version":"compute.v1alpha1",
+	  "task_id":"task-abcdef9876543210",
+	  "lease_id":"lease-1",
+	  "provider_config":{"plugin_id":"workflow-plugin-github","provider_id":"github-actions-runner"},
+	  "operation":"ephemeral_runner_job",
+	  "input":{
+	    "mode":"dispatch_then_wait",
+	    "environment":"stg",
+	    "os":"linux",
+	    "worker_id":"worker-0123456789abcdef",
+	    "task_id":"task-abcdef9876543210",
+	    "organization":"GoCodeAlone",
+	    "repository":"GoCodeAlone/workflow-compute",
+	    "workflow":"dogfood.yml",
+	    "ref":"main",
+	    "runner_group":"ephemeral",
+	    "timeout_seconds":2
+	  }
+	}`)
+	var stdout, stderr bytes.Buffer
+	err := runWithIO([]string{}, input, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "observe GitHub workflow job after runner exit") || !strings.Contains(err.Error(), "status 502") {
+		t.Fatalf("expected observation error, got %v\nstderr:\n%s", err, stderr.String())
+	}
+	proof := readFile(t, filepath.Join(workspace, "github-runner-proof.json"))
+	for _, want := range []string{"wfc-stg-ghp-linux-abcdef987249-543210f71ee4", "removed"} {
 		if !strings.Contains(proof, want) {
 			t.Fatalf("proof missing %q:\n%s", want, proof)
 		}

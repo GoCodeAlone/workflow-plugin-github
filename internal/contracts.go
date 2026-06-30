@@ -66,22 +66,6 @@ var githubContractRegistry = &pb.ContractRegistry{
 		},
 		{
 			Kind:          pb.ContractKind_CONTRACT_KIND_STEP,
-			StepType:      "step.gh_compute_gateway",
-			ConfigMessage: githubProtoPkg + "ComputeGatewayConfig",
-			InputMessage:  githubProtoPkg + "ComputeGatewayInput",
-			OutputMessage: githubProtoPkg + "ComputeGatewayOutput",
-			Mode:          pb.ContractMode_CONTRACT_MODE_STRICT_PROTO,
-		},
-		{
-			Kind:          pb.ContractKind_CONTRACT_KIND_STEP,
-			StepType:      "step.gh_create_check",
-			ConfigMessage: githubProtoPkg + "CreateCheckConfig",
-			InputMessage:  githubProtoPkg + "CreateCheckInput",
-			OutputMessage: githubProtoPkg + "CreateCheckOutput",
-			Mode:          pb.ContractMode_CONTRACT_MODE_STRICT_PROTO,
-		},
-		{
-			Kind:          pb.ContractKind_CONTRACT_KIND_STEP,
 			StepType:      "step.gh_pr_create",
 			ConfigMessage: githubProtoPkg + "PRCreateConfig",
 			InputMessage:  githubProtoPkg + "PRCreateInput",
