@@ -21,13 +21,13 @@ func TestT594EphemeralRunnerJobBuildsDeterministicNameAndLabels(t *testing.T) {
 		t.Fatalf("build spec: %v", err)
 	}
 
-	if spec.RunnerName != "wfc-stg-ghp-linux-01234567-abcdef98" {
+	if spec.RunnerName != "wfc-stg-ghp-linux-abcdef987249-543210f71ee4" {
 		t.Fatalf("runner name: got %q", spec.RunnerName)
 	}
 	wantLabels := []string{
 		"self-hosted",
 		"linux",
-		"wfc-stg-ghp-linux-01234567-abcdef98",
+		"wfc-stg-ghp-linux-abcdef987249-543210f71ee4",
 		"wfc-ghp-stg",
 		"wfc-ghp-ephemeral",
 	}
@@ -39,14 +39,50 @@ func TestT594EphemeralRunnerJobBuildsDeterministicNameAndLabels(t *testing.T) {
 	}
 }
 
+func TestT594EphemeralRunnerJobSpecKeepsTimestampedDogfoodTasksUnique(t *testing.T) {
+	base := EphemeralRunnerJobRequest{
+		Environment:  "stg",
+		OS:           "linux",
+		WorkerID:     "github-runner-linux-stg-am5-2-20260629",
+		Organization: "GoCodeAlone",
+		RunnerGroup:  "ephemeral",
+	}
+	first := base
+	first.TaskID = "github-provider-dogfood-linux-20260630061427"
+	second := base
+	second.TaskID = "github-provider-dogfood-linux-20260630064133"
+
+	firstSpec, err := BuildEphemeralRunnerJobSpec(first)
+	if err != nil {
+		t.Fatalf("build first spec: %v", err)
+	}
+	secondSpec, err := BuildEphemeralRunnerJobSpec(second)
+	if err != nil {
+		t.Fatalf("build second spec: %v", err)
+	}
+
+	if firstSpec.RunnerName == secondSpec.RunnerName {
+		t.Fatalf("runner names must be unique across timestamped dogfood tasks, both got %q", firstSpec.RunnerName)
+	}
+	if firstSpec.Labels[2] == secondSpec.Labels[2] {
+		t.Fatalf("runner dispatch labels must be unique across timestamped dogfood tasks, both got %q", firstSpec.Labels[2])
+	}
+	if firstSpec.RunnerName != "wfc-stg-ghp-linux-260629fabb6f-061427fb2c0e" {
+		t.Fatalf("first runner name: got %q", firstSpec.RunnerName)
+	}
+	if secondSpec.RunnerName != "wfc-stg-ghp-linux-260629fabb6f-064133cf86b4" {
+		t.Fatalf("second runner name: got %q", secondSpec.RunnerName)
+	}
+}
+
 func TestT594EphemeralRunnerJobUsesExactLabelsForDispatchAndAttachModes(t *testing.T) {
 	for _, mode := range []EphemeralRunnerJobMode{EphemeralRunnerJobModeDispatchThenWait, EphemeralRunnerJobModeAttachToQueued} {
 		t.Run(string(mode), func(t *testing.T) {
 			driver := &fakeEphemeralRunnerDriver{
 				result: EphemeralRunnerJobResult{
 					RunnerID:      42,
-					RunnerName:    "wfc-stg-ghp-linux-01234567-abcdef98",
-					Labels:        []string{"self-hosted", "linux", "wfc-stg-ghp-linux-01234567-abcdef98", "wfc-ghp-stg", "wfc-ghp-ephemeral"},
+					RunnerName:    "wfc-stg-ghp-linux-abcdef987249-543210f71ee4",
+					Labels:        []string{"self-hosted", "linux", "wfc-stg-ghp-linux-abcdef987249-543210f71ee4", "wfc-ghp-stg", "wfc-ghp-ephemeral"},
 					WorkflowRunID: 1001,
 					WorkflowJobID: 2002,
 					CleanupStatus: "removed",
@@ -81,7 +117,7 @@ func TestT594EphemeralRunnerJobCleansUpRunnerOnTimeout(t *testing.T) {
 	driver := &fakeEphemeralRunnerDriver{
 		result: EphemeralRunnerJobResult{
 			RunnerID:      42,
-			RunnerName:    "wfc-stg-ghp-linux-01234567-abcdef98",
+			RunnerName:    "wfc-stg-ghp-linux-abcdef987249-543210f71ee4",
 			CleanupStatus: "pending",
 		},
 		blockUntilDone: true,
@@ -117,8 +153,8 @@ func TestT594EphemeralRunnerJobProofIncludesAssignmentCleanupAndArtifacts(t *tes
 	driver := &fakeEphemeralRunnerDriver{
 		result: EphemeralRunnerJobResult{
 			RunnerID:      42,
-			RunnerName:    "wfc-stg-ghp-linux-01234567-abcdef98",
-			Labels:        []string{"self-hosted", "linux", "wfc-stg-ghp-linux-01234567-abcdef98", "wfc-ghp-stg", "wfc-ghp-ephemeral"},
+			RunnerName:    "wfc-stg-ghp-linux-abcdef987249-543210f71ee4",
+			Labels:        []string{"self-hosted", "linux", "wfc-stg-ghp-linux-abcdef987249-543210f71ee4", "wfc-ghp-stg", "wfc-ghp-ephemeral"},
 			WorkflowRunID: 1001,
 			WorkflowJobID: 2002,
 			WorkerID:      "worker-0123456789abcdef",
@@ -197,7 +233,7 @@ func TestT594RunnerProviderInvokesEphemeralRunnerJobSpec(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invoke ephemeral_runner_job: %v", err)
 	}
-	if result["runner_name"] != "wfc-stg-ghp-linux-01234567-abcdef98" {
+	if result["runner_name"] != "wfc-stg-ghp-linux-abcdef987249-543210f71ee4" {
 		t.Fatalf("runner name: got %+v", result)
 	}
 	if labels, ok := result["labels"].([]string); !ok || len(labels) != 5 || labels[3] != "wfc-ghp-stg" {

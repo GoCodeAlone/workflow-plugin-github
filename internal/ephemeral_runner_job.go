@@ -2,6 +2,8 @@ package internal
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -180,11 +182,23 @@ func shortEphemeralID(value string) string {
 	if value == "" {
 		return ""
 	}
-	if _, suffix, ok := strings.Cut(value, "-"); ok && suffix != "" {
-		value = suffix
+	var safe strings.Builder
+	for _, r := range strings.ToLower(value) {
+		switch {
+		case r >= 'a' && r <= 'z':
+			safe.WriteRune(r)
+		case r >= '0' && r <= '9':
+			safe.WriteRune(r)
+		}
 	}
-	if len(value) > 8 {
-		return value[:8]
+	token := safe.String()
+	if token == "" {
+		return ""
 	}
-	return value
+	if len(token) <= 8 {
+		return token
+	}
+	sum := sha256.Sum256([]byte(strings.ToLower(value)))
+	hash := hex.EncodeToString(sum[:])[:6]
+	return token[len(token)-6:] + hash
 }
