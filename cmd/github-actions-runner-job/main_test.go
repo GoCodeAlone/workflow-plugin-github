@@ -34,7 +34,7 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 			if body.Ref != "main" {
 				t.Fatalf("dispatch ref: got %q", body.Ref)
 			}
-			wantLabels := `["self-hosted","linux","wfc-stg-ghp-linux-01234567-abcdef98","wfc-ghp-stg","wfc-ghp-ephemeral"]`
+			wantLabels := `["self-hosted","linux","wfc-stg-ghp-linux-abcdef987249-543210f71ee4","wfc-ghp-stg","wfc-ghp-ephemeral"]`
 			for key, want := range map[string]string{
 				"runner_profile":                 "provider",
 				"allow_github_hosted_fallback":   "false",
@@ -103,9 +103,9 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 	for _, want := range []string{
 		"--url\nhttps://github.com/GoCodeAlone",
 		"--token\nrunner-registration-token",
-		"--name\nwfc-stg-ghp-linux-01234567-abcdef98",
+		"--name\nwfc-stg-ghp-linux-abcdef987249-543210f71ee4",
 		"--runnergroup\nephemeral",
-		"--labels\nself-hosted,linux,wfc-stg-ghp-linux-01234567-abcdef98,wfc-ghp-stg,wfc-ghp-ephemeral",
+		"--labels\nself-hosted,linux,wfc-stg-ghp-linux-abcdef987249-543210f71ee4,wfc-ghp-stg,wfc-ghp-ephemeral",
 		"--ephemeral",
 	} {
 		if !strings.Contains(configArgs, want) {
@@ -125,7 +125,7 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 		t.Fatalf("artifacts = %#v", result.Artifacts)
 	}
 	proof := readFile(t, filepath.Join(workspace, "github-runner-proof.json"))
-	for _, want := range []string{"wfc-stg-ghp-linux-01234567-abcdef98", "task-abcdef9876543210", "removed"} {
+	for _, want := range []string{"wfc-stg-ghp-linux-abcdef987249-543210f71ee4", "task-abcdef9876543210", "removed"} {
 		if !strings.Contains(proof, want) {
 			t.Fatalf("proof missing %q:\n%s", want, proof)
 		}
