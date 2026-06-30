@@ -133,6 +133,61 @@ func TestT915_GitHubRunnerClientDispatchesWorkflow(t *testing.T) {
 	}
 }
 
+func TestT915_GitHubRunnerClientTreatsMissingRunnerAsRemoved(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("method: got %q want DELETE", r.Method)
+		}
+		paths = append(paths, r.URL.Path)
+		http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := &httpGitHubRunnerClient{baseURL: server.URL, httpClient: server.Client()}
+	if err := client.RemoveRunner(context.Background(), "GoCodeAlone", "workflow-compute", 42, "github-token"); err != nil {
+		t.Fatalf("remove repo runner should ignore already-missing runner: %v", err)
+	}
+	if err := client.RemoveOrgRunner(context.Background(), "GoCodeAlone", 43, "github-token"); err != nil {
+		t.Fatalf("remove org runner should ignore already-missing runner: %v", err)
+	}
+	want := []string{
+		"/repos/GoCodeAlone/workflow-compute/actions/runners/42",
+		"/orgs/GoCodeAlone/actions/runners/43",
+	}
+	if strings.Join(paths, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("delete paths:\ngot:\n%s\nwant:\n%s", strings.Join(paths, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestT915_GitHubRunnerClientDrainsAcceptedDeleteResponseBody(t *testing.T) {
+	body := &trackingReadCloser{reader: strings.NewReader(`{"message":"Not Found"}`)}
+	client := &httpGitHubRunnerClient{
+		baseURL: "https://api.github.invalid",
+		httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			if r.Method != http.MethodDelete {
+				t.Fatalf("method: got %q want DELETE", r.Method)
+			}
+			return &http.Response{
+				StatusCode: http.StatusNotFound,
+				Status:     "404 Not Found",
+				Header:     make(http.Header),
+				Body:       body,
+				Request:    r,
+			}, nil
+		})},
+	}
+	if err := client.RemoveOrgRunner(context.Background(), "GoCodeAlone", 43, "github-token"); err != nil {
+		t.Fatalf("remove org runner: %v", err)
+	}
+	if !body.read {
+		t.Fatal("accepted delete response body was not drained")
+	}
+	if !body.closed {
+		t.Fatal("accepted delete response body was not closed")
+	}
+}
+
 func TestT41_GitHubRunnerProviderModuleRejectsUnknownConfig(t *testing.T) {
 	_, err := newGitHubRunnerProviderModule("provider", map[string]any{
 		"token":      "github-token",
@@ -540,6 +595,31 @@ type fakeRunnerClient struct {
 	dispatchedWorkflow          string
 	dispatchedRef               string
 	dispatchedInputs            map[string]string
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type trackingReadCloser struct {
+	reader *strings.Reader
+	read   bool
+	closed bool
+}
+
+func (b *trackingReadCloser) Read(p []byte) (int, error) {
+	n, err := b.reader.Read(p)
+	if n > 0 || err == io.EOF {
+		b.read = true
+	}
+	return n, err
+}
+
+func (b *trackingReadCloser) Close() error {
+	b.closed = true
+	return nil
 }
 
 func (f *fakeRunnerClient) RegistrationToken(_ context.Context, owner, repo, _ string) (GitHubRunnerRegistrationToken, error) {

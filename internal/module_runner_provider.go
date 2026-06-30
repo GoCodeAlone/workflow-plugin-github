@@ -90,7 +90,7 @@ func (c *httpGitHubRunnerClient) RemoveRunner(ctx context.Context, owner, repo s
 		return errors.New("runner_id must be positive")
 	}
 	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/runners/%d", c.baseURL, url.PathEscape(owner), url.PathEscape(repo), runnerID)
-	return c.do(ctx, http.MethodDelete, endpoint, nil, token, http.StatusNoContent, nil)
+	return c.doRunnerDelete(ctx, endpoint, token)
 }
 
 func (c *httpGitHubRunnerClient) OrgRegistrationToken(ctx context.Context, organization, token string) (GitHubRunnerRegistrationToken, error) {
@@ -110,7 +110,7 @@ func (c *httpGitHubRunnerClient) RemoveOrgRunner(ctx context.Context, organizati
 		return errors.New("runner_id must be positive")
 	}
 	endpoint := fmt.Sprintf("%s/orgs/%s/actions/runners/%d", c.baseURL, url.PathEscape(organization), runnerID)
-	return c.do(ctx, http.MethodDelete, endpoint, nil, token, http.StatusNoContent, nil)
+	return c.doRunnerDelete(ctx, endpoint, token)
 }
 
 func (c *httpGitHubRunnerClient) PreflightOrg(ctx context.Context, req GitHubRunnerProviderPreflightRequest, token string) (GitHubRunnerProviderPreflight, error) {
@@ -190,6 +190,15 @@ func (c *httpGitHubRunnerClient) do(ctx context.Context, method, endpoint string
 }
 
 func (c *httpGitHubRunnerClient) doRaw(ctx context.Context, method, endpoint string, body any, token string, wantStatus int, out any) (http.Header, error) {
+	return c.doRawAllowed(ctx, method, endpoint, body, token, []int{wantStatus}, out)
+}
+
+func (c *httpGitHubRunnerClient) doRunnerDelete(ctx context.Context, endpoint, token string) error {
+	_, err := c.doRawAllowed(ctx, http.MethodDelete, endpoint, nil, token, []int{http.StatusNoContent, http.StatusNotFound}, nil)
+	return err
+}
+
+func (c *httpGitHubRunnerClient) doRawAllowed(ctx context.Context, method, endpoint string, body any, token string, wantStatuses []int, out any) (http.Header, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, errors.New("github token is required")
 	}
@@ -221,11 +230,19 @@ func (c *httpGitHubRunnerClient) doRaw(ctx context.Context, method, endpoint str
 		return nil, fmt.Errorf("github runner request failed: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != wantStatus {
+	ok := false
+	for _, status := range wantStatuses {
+		if resp.StatusCode == status {
+			ok = true
+			break
+		}
+	}
+	if !ok {
 		limited, _ := io.ReadAll(io.LimitReader(resp.Body, 2048))
 		return nil, fmt.Errorf("github runner request returned %s: %s", resp.Status, strings.TrimSpace(string(limited)))
 	}
 	if out == nil {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return resp.Header, nil
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {

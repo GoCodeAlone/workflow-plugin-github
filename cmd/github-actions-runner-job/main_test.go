@@ -64,7 +64,7 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 
 	runnerDir := t.TempDir()
 	writeExecutable(t, filepath.Join(runnerDir, "config.sh"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/config.args\"\nprintf '{\"agentId\":42}\\n' > .runner\n")
-	writeExecutable(t, filepath.Join(runnerDir, "run.sh"), "#!/bin/sh\nprintf 'runner executed\\n' > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.log\"\n")
+	writeExecutable(t, filepath.Join(runnerDir, "run.sh"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.args\"\nprintf 'runner executed\\n' > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.log\"\n")
 	workspace := t.TempDir()
 	t.Chdir(workspace)
 	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", sidecar.URL)
@@ -114,6 +114,9 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 	}
 	if got := readFile(t, filepath.Join(workspace, "run.log")); !strings.Contains(got, "runner executed") {
 		t.Fatalf("run script did not execute: %q", got)
+	}
+	if got := readFile(t, filepath.Join(workspace, "run.args")); strings.TrimSpace(got) != "--once" {
+		t.Fatalf("run args: got %q want --once", got)
 	}
 	var result struct {
 		Artifacts []string `json:"artifacts"`
