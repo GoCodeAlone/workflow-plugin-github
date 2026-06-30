@@ -32,7 +32,7 @@ type GitHubRunnerClient interface {
 	OrgRegistrationToken(ctx context.Context, organization, token string) (GitHubRunnerRegistrationToken, error)
 	RemoveOrgRunner(ctx context.Context, organization string, runnerID int64, token string) error
 	PreflightOrg(ctx context.Context, req GitHubRunnerProviderPreflightRequest, token string) (GitHubRunnerProviderPreflight, error)
-	DispatchWorkflow(ctx context.Context, owner, repo, workflow, ref, token string) error
+	DispatchWorkflow(ctx context.Context, owner, repo, workflow, ref string, inputs map[string]string, token string) error
 }
 
 type GitHubRunnerRegistrationToken struct {
@@ -172,12 +172,16 @@ func (c *httpGitHubRunnerClient) PreflightOrg(ctx context.Context, req GitHubRun
 	}, nil
 }
 
-func (c *httpGitHubRunnerClient) DispatchWorkflow(ctx context.Context, owner, repo, workflow, ref, token string) error {
+func (c *httpGitHubRunnerClient) DispatchWorkflow(ctx context.Context, owner, repo, workflow, ref string, inputs map[string]string, token string) error {
 	if strings.TrimSpace(ref) == "" {
 		ref = "main"
 	}
 	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/workflows/%s/dispatches", c.baseURL, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(workflow))
-	return c.do(ctx, http.MethodPost, endpoint, map[string]any{"ref": ref}, token, http.StatusNoContent, nil)
+	body := map[string]any{"ref": ref}
+	if len(inputs) > 0 {
+		body["inputs"] = inputs
+	}
+	return c.do(ctx, http.MethodPost, endpoint, body, token, http.StatusNoContent, nil)
 }
 
 func (c *httpGitHubRunnerClient) do(ctx context.Context, method, endpoint string, body any, token string, wantStatus int, out any) error {
@@ -427,7 +431,8 @@ func (m *githubRunnerProviderModule) invokeMethod(ctx context.Context, method st
 			return nil, errors.New("workflow is required")
 		}
 		ref := stringArg(args, "ref")
-		if err := m.client.DispatchWorkflow(ctx, owner, repo, workflow, ref, m.config.Token); err != nil {
+		inputs := stringMapArg(args["inputs"])
+		if err := m.client.DispatchWorkflow(ctx, owner, repo, workflow, ref, inputs, m.config.Token); err != nil {
 			return nil, err
 		}
 		return map[string]any{}, nil
@@ -564,7 +569,8 @@ func (m *githubRunnerProviderModule) handleOrgPreflight(w http.ResponseWriter, r
 
 func (m *githubRunnerProviderModule) handleDispatchWorkflow(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Ref string `json:"ref"`
+		Ref    string            `json:"ref"`
+		Inputs map[string]string `json:"inputs,omitempty"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
 	decoder.DisallowUnknownFields()
@@ -576,6 +582,7 @@ func (m *githubRunnerProviderModule) handleDispatchWorkflow(w http.ResponseWrite
 		"repository":     r.PathValue("owner") + "/" + r.PathValue("repo"),
 		"workflow":       r.PathValue("workflow"),
 		"ref":            req.Ref,
+		"inputs":         req.Inputs,
 		"provider_token": bearerToken(r),
 	})
 	if err != nil {
