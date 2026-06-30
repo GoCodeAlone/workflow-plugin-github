@@ -33,6 +33,8 @@ type GitHubRunnerClient interface {
 	RemoveOrgRunner(ctx context.Context, organization string, runnerID int64, token string) error
 	PreflightOrg(ctx context.Context, req GitHubRunnerProviderPreflightRequest, token string) (GitHubRunnerProviderPreflight, error)
 	DispatchWorkflow(ctx context.Context, owner, repo, workflow, ref string, inputs map[string]string, token string) error
+	ListWorkflowRuns(ctx context.Context, owner, repo, workflow string, createdAfter time.Time, token string) ([]GitHubWorkflowRun, error)
+	ListWorkflowRunJobs(ctx context.Context, owner, repo string, runID int64, token string) ([]GitHubWorkflowJob, error)
 }
 
 type GitHubRunnerRegistrationToken struct {
@@ -54,6 +56,29 @@ type GitHubRunnerProviderPreflight struct {
 	RunnerCountChecked int      `json:"runner_count_checked,omitempty"`
 	ActionsEnabled     bool     `json:"actions_enabled"`
 	SelfHostedAllowed  bool     `json:"self_hosted_allowed"`
+}
+
+type GitHubWorkflowRun struct {
+	ID         int64  `json:"id"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion,omitempty"`
+	HTMLURL    string `json:"html_url,omitempty"`
+	CreatedAt  string `json:"created_at,omitempty"`
+	UpdatedAt  string `json:"updated_at,omitempty"`
+}
+
+type GitHubWorkflowJob struct {
+	ID              int64    `json:"id"`
+	RunID           int64    `json:"run_id,omitempty"`
+	Status          string   `json:"status"`
+	Conclusion      string   `json:"conclusion,omitempty"`
+	RunnerID        int64    `json:"runner_id,omitempty"`
+	RunnerName      string   `json:"runner_name,omitempty"`
+	RunnerGroupID   int64    `json:"runner_group_id,omitempty"`
+	RunnerGroupName string   `json:"runner_group_name,omitempty"`
+	Labels          []string `json:"labels,omitempty"`
+	StartedAt       string   `json:"started_at,omitempty"`
+	CompletedAt     string   `json:"completed_at,omitempty"`
 }
 
 type httpGitHubRunnerClient struct {
@@ -182,6 +207,55 @@ func (c *httpGitHubRunnerClient) DispatchWorkflow(ctx context.Context, owner, re
 		body["inputs"] = inputs
 	}
 	return c.do(ctx, http.MethodPost, endpoint, body, token, http.StatusNoContent, nil)
+}
+
+func (c *httpGitHubRunnerClient) ListWorkflowRuns(ctx context.Context, owner, repo, workflow string, createdAfter time.Time, token string) ([]GitHubWorkflowRun, error) {
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/workflows/%s/runs", c.baseURL, url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(workflow))
+	query := url.Values{}
+	query.Set("event", "workflow_dispatch")
+	query.Set("per_page", "20")
+	if !createdAfter.IsZero() {
+		query.Set("created", ">="+createdAfter.UTC().Format(time.RFC3339))
+	}
+	endpoint += "?" + query.Encode()
+	runs := make([]GitHubWorkflowRun, 0)
+	for endpoint != "" {
+		var out struct {
+			WorkflowRuns []GitHubWorkflowRun `json:"workflow_runs"`
+		}
+		headers, err := c.doRaw(ctx, http.MethodGet, endpoint, nil, token, http.StatusOK, &out)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, out.WorkflowRuns...)
+		endpoint = githubNextLink(headers.Get("Link"))
+	}
+	return runs, nil
+}
+
+func (c *httpGitHubRunnerClient) ListWorkflowRunJobs(ctx context.Context, owner, repo string, runID int64, token string) ([]GitHubWorkflowJob, error) {
+	if runID <= 0 {
+		return nil, errors.New("run_id must be positive")
+	}
+	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/jobs?per_page=100", c.baseURL, url.PathEscape(owner), url.PathEscape(repo), runID)
+	jobs := make([]GitHubWorkflowJob, 0)
+	for endpoint != "" {
+		var out struct {
+			Jobs []GitHubWorkflowJob `json:"jobs"`
+		}
+		headers, err := c.doRaw(ctx, http.MethodGet, endpoint, nil, token, http.StatusOK, &out)
+		if err != nil {
+			return nil, err
+		}
+		for _, job := range out.Jobs {
+			if job.RunID == 0 {
+				job.RunID = runID
+			}
+			jobs = append(jobs, job)
+		}
+		endpoint = githubNextLink(headers.Get("Link"))
+	}
+	return jobs, nil
 }
 
 func (c *httpGitHubRunnerClient) do(ctx context.Context, method, endpoint string, body any, token string, wantStatus int, out any) error {
@@ -453,6 +527,44 @@ func (m *githubRunnerProviderModule) invokeMethod(ctx context.Context, method st
 			return nil, err
 		}
 		return map[string]any{}, nil
+	case "workflow_runs":
+		owner, repo, repository, err := repositoryArg(args)
+		if err != nil {
+			return nil, err
+		}
+		if err := m.requireAllowedRepository(repository); err != nil {
+			return nil, err
+		}
+		workflow := stringArg(args, "workflow")
+		if workflow == "" {
+			return nil, errors.New("workflow is required")
+		}
+		createdAfter, _ := args["created_after"].(time.Time)
+		runs, err := m.client.ListWorkflowRuns(ctx, owner, repo, workflow, createdAfter, m.config.Token)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"workflow_runs": runs}, nil
+	case "workflow_run_jobs":
+		owner, repo, repository, err := repositoryArg(args)
+		if err != nil {
+			return nil, err
+		}
+		if err := m.requireAllowedRepository(repository); err != nil {
+			return nil, err
+		}
+		runID, err := int64Arg(args, "run_id")
+		if err != nil {
+			return nil, err
+		}
+		if runID <= 0 {
+			return nil, errors.New("run_id must be positive")
+		}
+		jobs, err := m.client.ListWorkflowRunJobs(ctx, owner, repo, runID, m.config.Token)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"jobs": jobs}, nil
 	case "ephemeral_runner_job":
 		req, err := ephemeralRunnerJobRequestFromArgs(args)
 		if err != nil {
@@ -484,6 +596,8 @@ func (m *githubRunnerProviderModule) HTTPHandler() http.Handler {
 	mux.HandleFunc("DELETE /v1/actions/orgs/{organization}/runners/{runner_id}", m.handleRemoveOrgRunner)
 	mux.HandleFunc("POST /v1/actions/orgs/{organization}/runners/preflight", m.handleOrgPreflight)
 	mux.HandleFunc("POST /v1/actions/repos/{owner}/{repo}/workflows/{workflow}/dispatches", m.handleDispatchWorkflow)
+	mux.HandleFunc("GET /v1/actions/repos/{owner}/{repo}/workflows/{workflow}/runs", m.handleWorkflowRuns)
+	mux.HandleFunc("GET /v1/actions/repos/{owner}/{repo}/actions/runs/{run_id}/jobs", m.handleWorkflowRunJobs)
 	return mux
 }
 
@@ -607,6 +721,59 @@ func (m *githubRunnerProviderModule) handleDispatchWorkflow(w http.ResponseWrite
 		return
 	}
 	writeProviderResponse(w, http.StatusNoContent, out)
+}
+
+func (m *githubRunnerProviderModule) handleWorkflowRuns(w http.ResponseWriter, r *http.Request) {
+	createdAfter, err := parseOptionalRFC3339Query(r.URL.Query().Get("created_after"), "created_after")
+	if err != nil {
+		writeProviderError(w, http.StatusBadRequest, err)
+		return
+	}
+	owner := r.PathValue("owner")
+	repo := r.PathValue("repo")
+	out, err := m.invokeMethod(r.Context(), "workflow_runs", map[string]any{
+		"repository":     owner + "/" + repo,
+		"workflow":       r.PathValue("workflow"),
+		"created_after":  createdAfter,
+		"provider_token": bearerToken(r),
+	})
+	if err != nil {
+		writeProviderError(w, providerErrorStatus(err), err)
+		return
+	}
+	writeProviderResponse(w, http.StatusOK, out)
+}
+
+func (m *githubRunnerProviderModule) handleWorkflowRunJobs(w http.ResponseWriter, r *http.Request) {
+	runID, err := strconv.ParseInt(r.PathValue("run_id"), 10, 64)
+	if err != nil || runID <= 0 {
+		writeProviderError(w, http.StatusBadRequest, errors.New("run_id must be positive"))
+		return
+	}
+	owner := r.PathValue("owner")
+	repo := r.PathValue("repo")
+	out, err := m.invokeMethod(r.Context(), "workflow_run_jobs", map[string]any{
+		"repository":     owner + "/" + repo,
+		"run_id":         runID,
+		"provider_token": bearerToken(r),
+	})
+	if err != nil {
+		writeProviderError(w, providerErrorStatus(err), err)
+		return
+	}
+	writeProviderResponse(w, http.StatusOK, out)
+}
+
+func parseOptionalRFC3339Query(value, name string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s must be RFC3339", name)
+	}
+	return parsed, nil
 }
 
 func bearerToken(r *http.Request) string {

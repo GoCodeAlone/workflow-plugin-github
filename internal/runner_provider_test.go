@@ -133,6 +133,50 @@ func TestT915_GitHubRunnerClientDispatchesWorkflow(t *testing.T) {
 	}
 }
 
+func TestT915_GitHubRunnerClientListsWorkflowRunsAndJobs(t *testing.T) {
+	var sawCreatedFilter bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer github-token" {
+			t.Fatalf("authorization header: got %q", r.Header.Get("Authorization"))
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/GoCodeAlone/workflow-compute/actions/workflows/dogfood.yml/runs":
+			if r.URL.Query().Get("event") != "workflow_dispatch" {
+				t.Fatalf("event query: %q", r.URL.RawQuery)
+			}
+			if strings.HasPrefix(r.URL.Query().Get("created"), ">=") {
+				sawCreatedFilter = true
+			}
+			writeRunnerProviderJSON(t, w, http.StatusOK, map[string]any{
+				"workflow_runs": []map[string]any{{"id": 28449657934, "status": "completed", "conclusion": "success"}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/repos/GoCodeAlone/workflow-compute/actions/runs/28449657934/jobs":
+			writeRunnerProviderJSON(t, w, http.StatusOK, map[string]any{
+				"jobs": []map[string]any{{"id": 84308154551, "status": "completed", "conclusion": "success", "runner_name": "wfc-stg-ghp-linux-260629fabb6f-1352329e8d5b"}},
+			})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	client := &httpGitHubRunnerClient{baseURL: server.URL, httpClient: server.Client()}
+	runs, err := client.ListWorkflowRuns(context.Background(), "GoCodeAlone", "workflow-compute", "dogfood.yml", time.Date(2026, 6, 30, 13, 53, 30, 0, time.UTC), "github-token")
+	if err != nil {
+		t.Fatalf("list workflow runs: %v", err)
+	}
+	if !sawCreatedFilter || len(runs) != 1 || runs[0].ID != 28449657934 {
+		t.Fatalf("runs=%+v sawCreatedFilter=%v", runs, sawCreatedFilter)
+	}
+	jobs, err := client.ListWorkflowRunJobs(context.Background(), "GoCodeAlone", "workflow-compute", 28449657934, "github-token")
+	if err != nil {
+		t.Fatalf("list workflow jobs: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].ID != 84308154551 || jobs[0].RunnerName == "" || jobs[0].RunID != 28449657934 {
+		t.Fatalf("jobs=%+v", jobs)
+	}
+}
+
 func TestT915_GitHubRunnerClientTreatsMissingRunnerAsRemoved(t *testing.T) {
 	var paths []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -595,6 +639,8 @@ type fakeRunnerClient struct {
 	dispatchedWorkflow          string
 	dispatchedRef               string
 	dispatchedInputs            map[string]string
+	workflowRuns                []GitHubWorkflowRun
+	workflowJobs                []GitHubWorkflowJob
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -655,6 +701,22 @@ func (f *fakeRunnerClient) DispatchWorkflow(_ context.Context, owner, repo, work
 	f.dispatchedRef = ref
 	f.dispatchedInputs = inputs
 	return nil
+}
+
+func (f *fakeRunnerClient) ListWorkflowRuns(_ context.Context, owner, repo, workflow string, _ time.Time, _ string) ([]GitHubWorkflowRun, error) {
+	f.dispatchedRepository = owner + "/" + repo
+	f.dispatchedWorkflow = workflow
+	return f.workflowRuns, nil
+}
+
+func (f *fakeRunnerClient) ListWorkflowRunJobs(_ context.Context, owner, repo string, runID int64, _ string) ([]GitHubWorkflowJob, error) {
+	f.dispatchedRepository = owner + "/" + repo
+	for i := range f.workflowJobs {
+		if f.workflowJobs[i].RunID == 0 {
+			f.workflowJobs[i].RunID = runID
+		}
+	}
+	return f.workflowJobs, nil
 }
 
 func writeRunnerProviderJSON(t *testing.T, w http.ResponseWriter, status int, v any) {
