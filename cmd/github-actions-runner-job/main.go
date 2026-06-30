@@ -240,35 +240,49 @@ func (d *runnerDriver) RunGitHubJob(ctx context.Context, mode internal.Ephemeral
 	if mode == "" {
 		mode = internal.EphemeralRunnerJobModeAttachToQueued
 	}
+	var dispatchRef string
+	var dispatchInputs map[string]string
 	if mode == internal.EphemeralRunnerJobModeDispatchThenWait {
 		if strings.TrimSpace(d.req.Workflow) == "" || strings.TrimSpace(d.req.Repository) == "" {
 			return internal.EphemeralRunnerJobResult{}, fmt.Errorf("repository and workflow are required for %s", mode)
 		}
-		ref := strings.TrimSpace(d.req.Ref)
-		if ref == "" {
-			ref = "main"
+		dispatchRef = strings.TrimSpace(d.req.Ref)
+		if dispatchRef == "" {
+			dispatchRef = "main"
 		}
 		inputs, err := d.workflowDispatchInputs(spec)
 		if err != nil {
 			return internal.EphemeralRunnerJobResult{}, err
 		}
-		if err := d.sidecar.dispatchWorkflow(ctx, d.req.Repository, d.req.Workflow, ref, inputs); err != nil {
-			return internal.EphemeralRunnerJobResult{}, err
-		}
+		dispatchInputs = inputs
 	}
 	if err := d.configureRunner(ctx, spec, token.Token); err != nil {
 		return internal.EphemeralRunnerJobResult{}, err
 	}
-	runnerID := d.runnerID()
-	if err := d.runRunner(ctx); err != nil {
-		return internal.EphemeralRunnerJobResult{}, err
+	result := internal.EphemeralRunnerJobResult{
+		RunnerID:   d.runnerID(),
+		RunnerName: spec.RunnerName,
+		Labels:     append([]string(nil), spec.Labels...),
 	}
-	return internal.EphemeralRunnerJobResult{
-		RunnerID:      runnerID,
-		RunnerName:    spec.RunnerName,
-		Labels:        append([]string(nil), spec.Labels...),
-		CleanupStatus: "removed",
-	}, nil
+	if mode == internal.EphemeralRunnerJobModeDispatchThenWait {
+		runner, err := d.startRunner(ctx)
+		if err != nil {
+			return result, err
+		}
+		if err := d.sidecar.dispatchWorkflow(ctx, d.req.Repository, d.req.Workflow, dispatchRef, dispatchInputs); err != nil {
+			runner.cancel()
+			_ = runner.wait()
+			return result, err
+		}
+		if err := runner.wait(); err != nil {
+			return result, err
+		}
+		return result, nil
+	}
+	if err := d.runRunner(ctx); err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 func (d *runnerDriver) workflowDispatchInputs(spec internal.EphemeralRunnerJobSpec) (map[string]string, error) {
@@ -316,6 +330,10 @@ func (d *runnerDriver) runRunner(ctx context.Context) error {
 	return runCommand(ctx, filepath.Join(d.runnerDir, "run.sh"), d.runnerDir, "--once")
 }
 
+func (d *runnerDriver) startRunner(ctx context.Context) (*runningCommand, error) {
+	return startCommand(ctx, filepath.Join(d.runnerDir, "run.sh"), d.runnerDir, "--once")
+}
+
 func (d *runnerDriver) runnerID() int64 {
 	data, err := os.ReadFile(filepath.Join(d.runnerDir, ".runner"))
 	if err != nil {
@@ -337,6 +355,37 @@ func runCommand(ctx context.Context, path, dir string, args ...string) error {
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s failed: %w: %s", filepath.Base(path), err, strings.TrimSpace(string(output)))
+	}
+	return nil
+}
+
+type runningCommand struct {
+	path   string
+	cancel context.CancelFunc
+	cmd    *exec.Cmd
+	output bytes.Buffer
+}
+
+func startCommand(ctx context.Context, path, dir string, args ...string) (*runningCommand, error) {
+	runCtx, cancel := context.WithCancel(ctx)
+	cmd := exec.CommandContext(runCtx, path, args...)
+	cmd.Dir = dir
+	cmd.Env = os.Environ()
+	running := &runningCommand{path: path, cancel: cancel, cmd: cmd}
+	cmd.Stdout = &running.output
+	cmd.Stderr = &running.output
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("%s start failed: %w", filepath.Base(path), err)
+	}
+	return running, nil
+}
+
+func (r *runningCommand) wait() error {
+	err := r.cmd.Wait()
+	r.cancel()
+	if err != nil {
+		return fmt.Errorf("%s failed: %w: %s", filepath.Base(r.path), err, strings.TrimSpace(r.output.String()))
 	}
 	return nil
 }
