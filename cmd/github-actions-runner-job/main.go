@@ -313,7 +313,7 @@ func (d *runnerDriver) configureRunner(ctx context.Context, spec internal.Epheme
 }
 
 func (d *runnerDriver) runRunner(ctx context.Context) error {
-	return runCommand(ctx, filepath.Join(d.runnerDir, "run.sh"), d.runnerDir)
+	return runCommand(ctx, filepath.Join(d.runnerDir, "run.sh"), d.runnerDir, "--once")
 }
 
 func (d *runnerDriver) runnerID() int64 {

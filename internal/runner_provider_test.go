@@ -133,6 +133,33 @@ func TestT915_GitHubRunnerClientDispatchesWorkflow(t *testing.T) {
 	}
 }
 
+func TestT915_GitHubRunnerClientTreatsMissingRunnerAsRemoved(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete {
+			t.Fatalf("method: got %q want DELETE", r.Method)
+		}
+		paths = append(paths, r.URL.Path)
+		http.Error(w, `{"message":"Not Found"}`, http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client := &httpGitHubRunnerClient{baseURL: server.URL, httpClient: server.Client()}
+	if err := client.RemoveRunner(context.Background(), "GoCodeAlone", "workflow-compute", 42, "github-token"); err != nil {
+		t.Fatalf("remove repo runner should ignore already-missing runner: %v", err)
+	}
+	if err := client.RemoveOrgRunner(context.Background(), "GoCodeAlone", 43, "github-token"); err != nil {
+		t.Fatalf("remove org runner should ignore already-missing runner: %v", err)
+	}
+	want := []string{
+		"/repos/GoCodeAlone/workflow-compute/actions/runners/42",
+		"/orgs/GoCodeAlone/actions/runners/43",
+	}
+	if strings.Join(paths, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("delete paths:\ngot:\n%s\nwant:\n%s", strings.Join(paths, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestT41_GitHubRunnerProviderModuleRejectsUnknownConfig(t *testing.T) {
 	_, err := newGitHubRunnerProviderModule("provider", map[string]any{
 		"token":      "github-token",
