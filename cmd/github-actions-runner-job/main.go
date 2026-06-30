@@ -29,6 +29,7 @@ const (
 
 var githubJobPollInterval = 5 * time.Second
 var githubJobExitGracePolls = 3
+var githubRunnerShutdownGrace = 10 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -323,7 +324,7 @@ func (d *runnerDriver) RunGitHubJob(ctx context.Context, mode internal.Ephemeral
 		dispatchedAfter := time.Now().UTC().Add(-10 * time.Second)
 		if err := d.sidecar.dispatchWorkflow(ctx, d.req.Repository, d.req.Workflow, dispatchRef, dispatchInputs); err != nil {
 			runner.cancel()
-			_ = runner.wait()
+			_, _ = runner.waitAfterCancel(githubRunnerShutdownGrace)
 			return result, err
 		}
 		completion, err := d.waitForGitHubCompletion(ctx, runner, spec.RunnerName, dispatchedAfter)
@@ -396,7 +397,7 @@ func (d *runnerDriver) waitForGitHubCompletion(ctx context.Context, runner *runn
 			return last, nil
 		case result := <-runner.result:
 			runner.cancel()
-			err := <-runner.done
+			err, _ := runner.waitAfterCancel(githubRunnerShutdownGrace)
 			if result.success {
 				if completion, observeErr := d.observeGitHubJob(ctx, runnerName, dispatchedAfter); observeErr == nil && completion.WorkflowRunID != 0 {
 					if completion.Terminal && !completion.Success {
@@ -422,18 +423,18 @@ func (d *runnerDriver) waitForGitHubCompletion(ctx context.Context, runner *runn
 				continue
 			}
 			runner.cancel()
-			_ = <-runner.done
+			_, _ = runner.waitAfterCancel(githubRunnerShutdownGrace)
 			if completion.Success {
 				return completion, nil
 			}
 			return completion, fmt.Errorf("github workflow job failed: %s", completion.Message)
 		case <-ctx.Done():
 			runner.cancel()
-			err := <-runner.done
+			err, _ := runner.waitAfterCancel(githubRunnerShutdownGrace)
 			if err != nil {
 				return last, fmt.Errorf("%s timed out waiting for GitHub job completion: %w: %s", filepath.Base(runner.path), ctx.Err(), runner.output())
 			}
-			return last, ctx.Err()
+			return last, fmt.Errorf("%s timed out waiting for GitHub job completion: %w", filepath.Base(runner.path), ctx.Err())
 		}
 	}
 }
@@ -619,6 +620,20 @@ func (r *runningCommand) wait() error {
 		return fmt.Errorf("%s failed: %w: %s", filepath.Base(r.path), err, output)
 	}
 	return nil
+}
+
+func (r *runningCommand) waitAfterCancel(timeout time.Duration) (error, bool) {
+	if timeout <= 0 {
+		return <-r.done, true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case err := <-r.done:
+		return err, true
+	case <-timer.C:
+		return nil, false
+	}
 }
 
 func (r *runningCommand) waitForGitHubJob(ctx context.Context) error {

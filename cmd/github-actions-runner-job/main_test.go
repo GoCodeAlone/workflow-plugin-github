@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/GoCodeAlone/workflow-plugin-github/internal"
 )
 
 func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testing.T) {
@@ -329,6 +333,125 @@ func TestT915CommandTreatsGitHubJobAPIAsCompletion(t *testing.T) {
 		if !strings.Contains(proof, want) {
 			t.Fatalf("proof missing %q:\n%s", want, proof)
 		}
+	}
+}
+
+func TestT915WaitForGitHubCompletionDoesNotBlockOnRunnerShutdownAfterTerminalSuccess(t *testing.T) {
+	oldPoll := githubJobPollInterval
+	githubJobPollInterval = 10 * time.Millisecond
+	oldShutdownGrace := githubRunnerShutdownGrace
+	githubRunnerShutdownGrace = 10 * time.Millisecond
+	t.Cleanup(func() {
+		githubJobPollInterval = oldPoll
+		githubRunnerShutdownGrace = oldShutdownGrace
+	})
+
+	var canceled bool
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/runs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":28466630619,"status":"completed","conclusion":"success"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/actions/runs/28466630619/jobs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jobs":[{"id":84367972241,"run_id":28466630619,"status":"completed","conclusion":"success","runner_name":"wfc-stg-ghp-linux-260629fabb6f-1820455d6b7c"}]}`))
+		default:
+			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+
+	driver := &runnerDriver{
+		req: internal.EphemeralRunnerJobRequest{
+			Repository: "GoCodeAlone/workflow-compute",
+			Workflow:   "dogfood.yml",
+		},
+		sidecar: &providerSidecarClient{
+			baseURL: sidecar.URL,
+			token:   "provider-token",
+			http:    sidecar.Client(),
+		},
+	}
+	runner := &runningCommand{
+		path: "run.sh",
+		cancel: func() {
+			canceled = true
+		},
+		result: make(chan runnerCompletion, 1),
+		done:   make(chan error),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		completion, err := driver.waitForGitHubCompletion(ctx, runner, "wfc-stg-ghp-linux-260629fabb6f-1820455d6b7c", time.Now().UTC().Add(-time.Minute))
+		if err != nil {
+			done <- err
+			return
+		}
+		if !completion.Success || !completion.Terminal || completion.WorkflowRunID != 28466630619 || completion.WorkflowJobID != 84367972241 {
+			done <- fmt.Errorf("completion = %+v", completion)
+			return
+		}
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("waitForGitHubCompletion blocked on runner shutdown after terminal success")
+	}
+	if !canceled {
+		t.Fatal("runner was not asked to stop")
+	}
+}
+
+func TestT915WaitForGitHubCompletionDoesNotBlockOnRunnerShutdownAfterTimeout(t *testing.T) {
+	oldPoll := githubJobPollInterval
+	githubJobPollInterval = time.Hour
+	oldShutdownGrace := githubRunnerShutdownGrace
+	githubRunnerShutdownGrace = 10 * time.Millisecond
+	t.Cleanup(func() {
+		githubJobPollInterval = oldPoll
+		githubRunnerShutdownGrace = oldShutdownGrace
+	})
+
+	var canceled bool
+	driver := &runnerDriver{}
+	runner := &runningCommand{
+		path: "run.sh",
+		cancel: func() {
+			canceled = true
+		},
+		result: make(chan runnerCompletion, 1),
+		done:   make(chan error),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := driver.waitForGitHubCompletion(ctx, runner, "wfc-stg-ghp-linux-timeout", time.Now().UTC().Add(-time.Minute))
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "timed out waiting for GitHub job completion") {
+			t.Fatalf("err = %v, want timeout", err)
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("waitForGitHubCompletion blocked on runner shutdown after timeout")
+	}
+	if !canceled {
+		t.Fatal("runner was not asked to stop")
 	}
 }
 
