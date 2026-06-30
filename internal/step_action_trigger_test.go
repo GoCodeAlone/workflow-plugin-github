@@ -9,9 +9,8 @@ import (
 // --- mock GitHub client ---
 
 type mockGitHubClient struct {
-	triggerWorkflowFunc  func(ctx context.Context, owner, repo, workflow, ref string, inputs map[string]string, token string) error
-	getWorkflowRunFunc   func(ctx context.Context, owner, repo string, runID int64, token string) (*WorkflowRun, error)
-	createCheckRunFunc   func(ctx context.Context, owner, repo string, req *CreateCheckRunRequest, token string) (*CheckRun, error)
+	triggerWorkflowFunc func(ctx context.Context, owner, repo, workflow, ref string, inputs map[string]string, token string) error
+	getWorkflowRunFunc  func(ctx context.Context, owner, repo string, runID int64, token string) (*WorkflowRun, error)
 }
 
 func (m *mockGitHubClient) TriggerWorkflow(ctx context.Context, owner, repo, workflow, ref string, inputs map[string]string, token string) error {
@@ -26,13 +25,6 @@ func (m *mockGitHubClient) GetWorkflowRun(ctx context.Context, owner, repo strin
 		return m.getWorkflowRunFunc(ctx, owner, repo, runID, token)
 	}
 	return &WorkflowRun{ID: runID, Status: "completed", Conclusion: "success"}, nil
-}
-
-func (m *mockGitHubClient) CreateCheckRun(ctx context.Context, owner, repo string, req *CreateCheckRunRequest, token string) (*CheckRun, error) {
-	if m.createCheckRunFunc != nil {
-		return m.createCheckRunFunc(ctx, owner, repo, req, token)
-	}
-	return &CheckRun{ID: 42, Status: "completed"}, nil
 }
 
 // --- step.gh_action_trigger tests ---

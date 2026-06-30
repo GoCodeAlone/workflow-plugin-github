@@ -90,55 +90,10 @@ Checks or polls the status of a GitHub Actions workflow run.
     timeout: "30m"
 ```
 
-### Step: `step.gh_compute_gateway`
-
-Submits a GitHub-origin workload to workflow-compute's protected gateway. The
-compute server remains in the execution path; raw agents are not registered as
-GitHub runners. When `write_check` is enabled, the check target must match the
-repository and SHA verified by the compute server.
-
-```yaml
-- type: step.gh_compute_gateway
-  config:
-    server_url: "${COMPUTE_SERVER_URL}"
-    token: "${COMPUTE_GITHUB_TOKEN}"
-    repository: "GoCodeAlone/workflow-compute"
-    oidc_token: "{{.github_oidc_token}}"
-    workflow_run_id: "{{.run_id}}"
-    workflow_job_id: "{{.job_id}}"
-    workflow_job_name: "build"
-    ref: "{{.ref}}"
-    sha: "{{.sha}}"
-    org_id: "org-1"
-    pool_id: "pool-1"
-    policy_id: "policy-1"
-    command_args: ["go", "test", "./..."]
-    wait: true
-    write_check: true
-    check_owner: "GoCodeAlone"
-    check_repo: "workflow-compute"
-    check_sha: "{{.sha}}"
-    check_name: "workflow-compute"
-    check_token: "${GITHUB_TOKEN}"
-```
-
-### Step: `step.gh_create_check`
-
-Creates a GitHub Check Run (commit status check).
-
-```yaml
-- type: step.gh_create_check
-  config:
-    owner: "GoCodeAlone"
-    repo: "workflow"
-    sha: "abc123"
-    name: "workflow-ci"
-    status: "completed"
-    conclusion: "success"
-    title: "CI Pipeline"
-    summary: "All tests passed"
-    token: "${GITHUB_TOKEN}"
-```
+Workflow-compute workloads should be routed through a workflow-compute provider
+or through GitHub's normal self-hosted runner/webhook surfaces. This plugin does
+not expose workflow-compute gateway client steps or generic check-run creation
+steps.
 
 ## Building
 

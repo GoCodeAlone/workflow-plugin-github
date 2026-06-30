@@ -37,22 +37,6 @@
     },
     {
       "kind": "step",
-      "type": "step.gh_compute_gateway",
-      "mode": "strict_proto",
-      "config": "workflow.plugin.github.v1.ComputeGatewayConfig",
-      "input": "workflow.plugin.github.v1.ComputeGatewayInput",
-      "output": "workflow.plugin.github.v1.ComputeGatewayOutput"
-    },
-    {
-      "kind": "step",
-      "type": "step.gh_create_check",
-      "mode": "strict_proto",
-      "config": "workflow.plugin.github.v1.CreateCheckConfig",
-      "input": "workflow.plugin.github.v1.CreateCheckInput",
-      "output": "workflow.plugin.github.v1.CreateCheckOutput"
-    },
-    {
-      "kind": "step",
       "type": "step.gh_pr_create",
       "mode": "strict_proto",
       "config": "workflow.plugin.github.v1.PRCreateConfig",

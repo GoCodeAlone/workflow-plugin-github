@@ -71,8 +71,6 @@ func (p *githubPlugin) StepTypes() []string {
 		// Existing steps
 		"step.gh_action_trigger",
 		"step.gh_action_status",
-		"step.gh_compute_gateway",
-		"step.gh_create_check",
 		// Pull request steps
 		"step.gh_pr_create",
 		"step.gh_pr_merge",
@@ -101,10 +99,6 @@ func (p *githubPlugin) CreateStep(typeName, name string, config map[string]any) 
 		return newActionTriggerStep(name, config, nil)
 	case "step.gh_action_status":
 		return newActionStatusStep(name, config, nil)
-	case "step.gh_compute_gateway":
-		return newComputeGatewayStep(name, config, nil)
-	case "step.gh_create_check":
-		return newCreateCheckStep(name, config, nil)
 	case "step.gh_pr_create":
 		return newPRCreateStep(name, config)
 	case "step.gh_pr_merge":

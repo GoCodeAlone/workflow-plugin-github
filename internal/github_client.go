@@ -17,7 +17,6 @@ import (
 type GitHubClient interface {
 	TriggerWorkflow(ctx context.Context, owner, repo, workflow, ref string, inputs map[string]string, token string) error
 	GetWorkflowRun(ctx context.Context, owner, repo string, runID int64, token string) (*WorkflowRun, error)
-	CreateCheckRun(ctx context.Context, owner, repo string, req *CreateCheckRunRequest, token string) (*CheckRun, error)
 }
 
 // WorkflowRun represents a GitHub Actions workflow run.
@@ -26,28 +25,6 @@ type WorkflowRun struct {
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	HTMLURL    string `json:"html_url"`
-}
-
-// CreateCheckRunRequest holds parameters for creating a GitHub Check Run.
-type CreateCheckRunRequest struct {
-	Name       string          `json:"name"`
-	HeadSHA    string          `json:"head_sha"`
-	Status     string          `json:"status"`
-	Conclusion string          `json:"conclusion,omitempty"`
-	Output     *CheckRunOutput `json:"output,omitempty"`
-}
-
-// CheckRunOutput holds the title and summary for a check run.
-type CheckRunOutput struct {
-	Title   string `json:"title"`
-	Summary string `json:"summary"`
-}
-
-// CheckRun represents a GitHub Check Run response.
-type CheckRun struct {
-	ID      int64  `json:"id"`
-	HTMLURL string `json:"html_url"`
-	Status  string `json:"status"`
 }
 
 // httpGitHubClient implements GitHubClient using net/http.
@@ -141,23 +118,4 @@ func (c *httpGitHubClient) GetWorkflowRun(ctx context.Context, owner, repo strin
 		return nil, fmt.Errorf("parse workflow run: %w", err)
 	}
 	return &run, nil
-}
-
-// CreateCheckRun creates a GitHub Check Run on a commit.
-func (c *httpGitHubClient) CreateCheckRun(ctx context.Context, owner, repo string, req *CreateCheckRunRequest, token string) (*CheckRun, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/check-runs", c.baseURL, owner, repo)
-
-	body, status, err := c.doRequest(ctx, http.MethodPost, url, req, token)
-	if err != nil {
-		return nil, fmt.Errorf("create check run: %w", err)
-	}
-	if status != http.StatusCreated {
-		return nil, fmt.Errorf("create check run: unexpected status %d", status)
-	}
-
-	var check CheckRun
-	if err := json.Unmarshal(body, &check); err != nil {
-		return nil, fmt.Errorf("parse check run: %w", err)
-	}
-	return &check, nil
 }

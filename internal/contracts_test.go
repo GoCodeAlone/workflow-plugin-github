@@ -54,8 +54,6 @@ func TestContractRegistry_CoversAllStepTypes(t *testing.T) {
 	wantSteps := []string{
 		"step.gh_action_trigger",
 		"step.gh_action_status",
-		"step.gh_compute_gateway",
-		"step.gh_create_check",
 		"step.gh_pr_create",
 		"step.gh_pr_merge",
 		"step.gh_pr_comment",
@@ -96,11 +94,29 @@ func TestContractRegistry_CoversAllStepTypes(t *testing.T) {
 	}
 }
 
+func TestT916_GitHubPluginDoesNotExposeComputeGatewayOrSyntheticCheckSteps(t *testing.T) {
+	p := &githubPlugin{}
+	for _, stepType := range p.StepTypes() {
+		switch stepType {
+		case "step.gh_compute_gateway", "step.gh_create_check":
+			t.Fatalf("github plugin must not expose %s; compute submission/check ownership belongs outside this plugin", stepType)
+		}
+	}
+
+	reg := p.ContractRegistry()
+	for _, contract := range reg.Contracts {
+		switch contract.StepType {
+		case "step.gh_compute_gateway", "step.gh_create_check":
+			t.Fatalf("github plugin contract registry must not expose %s", contract.StepType)
+		}
+	}
+}
+
 func TestContractRegistry_ContractCount(t *testing.T) {
 	p := &githubPlugin{}
 	reg := p.ContractRegistry()
-	// 3 modules + 17 steps = 20 total
-	if len(reg.Contracts) != 20 {
-		t.Errorf("expected 20 contracts (3 modules + 17 steps), got %d", len(reg.Contracts))
+	// 3 modules + 15 steps = 18 total
+	if len(reg.Contracts) != 18 {
+		t.Errorf("expected 18 contracts (3 modules + 15 steps), got %d", len(reg.Contracts))
 	}
 }

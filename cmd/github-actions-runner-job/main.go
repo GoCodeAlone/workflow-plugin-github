@@ -334,6 +334,9 @@ func (d *runnerDriver) RunGitHubJob(ctx context.Context, mode internal.Ephemeral
 		if completion.WorkflowJobID != 0 {
 			result.WorkflowJobID = completion.WorkflowJobID
 		}
+		if completion.WorkflowJobStatus != "" {
+			result.WorkflowJobStatus = completion.WorkflowJobStatus
+		}
 		if err != nil {
 			return result, err
 		}
@@ -367,11 +370,13 @@ func (d *runnerDriver) workflowDispatchInputs(spec internal.EphemeralRunnerJobSp
 }
 
 type githubJobCompletion struct {
-	WorkflowRunID int64
-	WorkflowJobID int64
-	Success       bool
-	Terminal      bool
-	Message       string
+	WorkflowRunID     int64
+	WorkflowJobID     int64
+	WorkflowJobStatus string
+	Assigned          bool
+	Success           bool
+	Terminal          bool
+	Message           string
 }
 
 func (d *runnerDriver) waitForGitHubCompletion(ctx context.Context, runner *runningCommand, runnerName string, dispatchedAfter time.Time) (githubJobCompletion, error) {
@@ -385,7 +390,14 @@ func (d *runnerDriver) waitForGitHubCompletion(ctx context.Context, runner *runn
 			if err != nil {
 				return last, fmt.Errorf("%s failed: %w: %s", filepath.Base(runner.path), err, runner.output())
 			}
-			if completion, err := d.observeTerminalGitHubJob(ctx, runnerName, dispatchedAfter, githubJobExitGracePolls); err == nil && completion.WorkflowRunID != 0 {
+			completion, observeErr := d.observeTerminalGitHubJob(ctx, runnerName, dispatchedAfter, githubJobExitGracePolls)
+			if observeErr != nil {
+				return last, fmt.Errorf("observe GitHub workflow job after runner exit: %w", observeErr)
+			}
+			if completion.WorkflowRunID != 0 {
+				if !completion.Assigned {
+					return completion, fmt.Errorf("%s exited before GitHub workflow job was assigned: %s", filepath.Base(runner.path), completion.Message)
+				}
 				if !completion.Terminal {
 					return completion, fmt.Errorf("%s exited before GitHub workflow job completed: %s", filepath.Base(runner.path), completion.Message)
 				}
@@ -394,7 +406,7 @@ func (d *runnerDriver) waitForGitHubCompletion(ctx context.Context, runner *runn
 				}
 				return completion, nil
 			}
-			return last, nil
+			return last, fmt.Errorf("%s exited before GitHub workflow job was assigned to runner %s", filepath.Base(runner.path), runnerName)
 		case result := <-runner.result:
 			runner.cancel()
 			err, _ := runner.waitAfterCancel(githubRunnerShutdownGrace)
@@ -479,19 +491,32 @@ func (d *runnerDriver) observeGitHubJob(ctx context.Context, runnerName string, 
 	if err != nil {
 		return githubJobCompletion{}, err
 	}
+	var unassigned githubJobCompletion
 	for _, run := range runs {
 		jobs, err := d.sidecar.workflowRunJobs(ctx, d.req.Repository, run.ID)
 		if err != nil {
 			return githubJobCompletion{}, err
 		}
 		for _, job := range jobs {
-			if strings.TrimSpace(job.RunnerName) != runnerName {
+			jobRunner := strings.TrimSpace(job.RunnerName)
+			if jobRunner == "" && unassigned.WorkflowRunID == 0 && d.jobLabelsMatchRunner(job.Labels, runnerName) && !strings.EqualFold(job.Status, "completed") && !strings.EqualFold(run.Status, "completed") {
+				unassigned = githubJobCompletion{
+					WorkflowRunID:     run.ID,
+					WorkflowJobID:     job.ID,
+					WorkflowJobStatus: job.Status,
+					Message:           fmt.Sprintf("run=%d job=%d status=%s conclusion=%s runner=unassigned", run.ID, job.ID, job.Status, job.Conclusion),
+				}
+				continue
+			}
+			if jobRunner != runnerName {
 				continue
 			}
 			completion := githubJobCompletion{
-				WorkflowRunID: run.ID,
-				WorkflowJobID: job.ID,
-				Message:       fmt.Sprintf("run=%d job=%d status=%s conclusion=%s runner=%s", run.ID, job.ID, job.Status, job.Conclusion, job.RunnerName),
+				WorkflowRunID:     run.ID,
+				WorkflowJobID:     job.ID,
+				WorkflowJobStatus: job.Status,
+				Assigned:          true,
+				Message:           fmt.Sprintf("run=%d job=%d status=%s conclusion=%s runner=%s", run.ID, job.ID, job.Status, job.Conclusion, job.RunnerName),
 			}
 			if !strings.EqualFold(job.Status, "completed") && !strings.EqualFold(run.Status, "completed") {
 				return completion, nil
@@ -505,7 +530,29 @@ func (d *runnerDriver) observeGitHubJob(ctx context.Context, runnerName string, 
 			return completion, nil
 		}
 	}
-	return githubJobCompletion{}, nil
+	return unassigned, nil
+}
+
+func (d *runnerDriver) jobLabelsMatchRunner(jobLabels []string, runnerName string) bool {
+	if len(jobLabels) == 0 {
+		return false
+	}
+	labels := make(map[string]struct{}, len(jobLabels))
+	for _, label := range jobLabels {
+		label = strings.ToLower(strings.TrimSpace(label))
+		if label != "" {
+			labels[label] = struct{}{}
+		}
+	}
+	for _, want := range []string{"self-hosted", strings.ToLower(strings.TrimSpace(runnerName))} {
+		if want == "" {
+			return false
+		}
+		if _, ok := labels[want]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (d *runnerDriver) RemoveOrgRunner(ctx context.Context, organization string, runnerID int64) error {
