@@ -363,7 +363,8 @@ type runningCommand struct {
 	path   string
 	cancel context.CancelFunc
 	cmd    *exec.Cmd
-	output bytes.Buffer
+	stdout bytes.Buffer
+	stderr bytes.Buffer
 }
 
 func startCommand(ctx context.Context, path, dir string, args ...string) (*runningCommand, error) {
@@ -372,8 +373,8 @@ func startCommand(ctx context.Context, path, dir string, args ...string) (*runni
 	cmd.Dir = dir
 	cmd.Env = os.Environ()
 	running := &runningCommand{path: path, cancel: cancel, cmd: cmd}
-	cmd.Stdout = &running.output
-	cmd.Stderr = &running.output
+	cmd.Stdout = &running.stdout
+	cmd.Stderr = &running.stderr
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, fmt.Errorf("%s start failed: %w", filepath.Base(path), err)
@@ -385,7 +386,8 @@ func (r *runningCommand) wait() error {
 	err := r.cmd.Wait()
 	r.cancel()
 	if err != nil {
-		return fmt.Errorf("%s failed: %w: %s", filepath.Base(r.path), err, strings.TrimSpace(r.output.String()))
+		output := strings.TrimSpace(strings.Join([]string{r.stdout.String(), r.stderr.String()}, "\n"))
+		return fmt.Errorf("%s failed: %w: %s", filepath.Base(r.path), err, output)
 	}
 	return nil
 }
