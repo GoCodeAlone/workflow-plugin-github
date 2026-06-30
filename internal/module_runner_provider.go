@@ -242,6 +242,7 @@ func (c *httpGitHubRunnerClient) doRawAllowed(ctx context.Context, method, endpo
 		return nil, fmt.Errorf("github runner request returned %s: %s", resp.Status, strings.TrimSpace(string(limited)))
 	}
 	if out == nil {
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return resp.Header, nil
 	}
 	if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
