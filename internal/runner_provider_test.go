@@ -113,12 +113,22 @@ func TestT915_GitHubRunnerClientDispatchesWorkflow(t *testing.T) {
 		if body["ref"] != "main" {
 			t.Fatalf("body: %+v", body)
 		}
+		inputs, ok := body["inputs"].(map[string]any)
+		if !ok {
+			t.Fatalf("inputs: got %#v", body["inputs"])
+		}
+		if inputs["runner_profile"] != "provider" || inputs["allow_github_hosted_fallback"] != "false" {
+			t.Fatalf("inputs: got %+v", inputs)
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
 
 	client := &httpGitHubRunnerClient{baseURL: server.URL, httpClient: server.Client()}
-	if err := client.DispatchWorkflow(context.Background(), "GoCodeAlone", "workflow-compute", "dogfood.yml", "main", "github-token"); err != nil {
+	if err := client.DispatchWorkflow(context.Background(), "GoCodeAlone", "workflow-compute", "dogfood.yml", "main", map[string]string{
+		"runner_profile":               "provider",
+		"allow_github_hosted_fallback": "false",
+	}, "github-token"); err != nil {
 		t.Fatalf("dispatch workflow: %v", err)
 	}
 }
@@ -299,7 +309,7 @@ func TestT915_GitHubRunnerProviderHTTPDispatchesWorkflow(t *testing.T) {
 	server := httptest.NewServer(module.HTTPHandler())
 	defer server.Close()
 
-	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/dispatches", strings.NewReader(`{"ref":"main"}`))
+	req, err := http.NewRequest(http.MethodPost, server.URL+"/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/dispatches", strings.NewReader(`{"ref":"main","inputs":{"runner_profile":"provider","allow_github_hosted_fallback":"false"}}`))
 	if err != nil {
 		t.Fatalf("request: %v", err)
 	}
@@ -315,6 +325,12 @@ func TestT915_GitHubRunnerProviderHTTPDispatchesWorkflow(t *testing.T) {
 	}
 	if fake.dispatchedRepository != "GoCodeAlone/workflow-compute" || fake.dispatchedWorkflow != "dogfood.yml" || fake.dispatchedRef != "main" {
 		t.Fatalf("dispatch: repo=%q workflow=%q ref=%q", fake.dispatchedRepository, fake.dispatchedWorkflow, fake.dispatchedRef)
+	}
+	if got := fake.dispatchedInputs["runner_profile"]; got != "provider" {
+		t.Fatalf("runner_profile input: got %q", got)
+	}
+	if got := fake.dispatchedInputs["allow_github_hosted_fallback"]; got != "false" {
+		t.Fatalf("allow_github_hosted_fallback input: got %q", got)
 	}
 }
 
@@ -523,6 +539,7 @@ type fakeRunnerClient struct {
 	dispatchedRepository        string
 	dispatchedWorkflow          string
 	dispatchedRef               string
+	dispatchedInputs            map[string]string
 }
 
 func (f *fakeRunnerClient) RegistrationToken(_ context.Context, owner, repo, _ string) (GitHubRunnerRegistrationToken, error) {
@@ -552,10 +569,11 @@ func (f *fakeRunnerClient) PreflightOrg(_ context.Context, req GitHubRunnerProvi
 	return f.preflight, nil
 }
 
-func (f *fakeRunnerClient) DispatchWorkflow(_ context.Context, owner, repo, workflow, ref, _ string) error {
+func (f *fakeRunnerClient) DispatchWorkflow(_ context.Context, owner, repo, workflow, ref string, inputs map[string]string, _ string) error {
 	f.dispatchedRepository = owner + "/" + repo
 	f.dispatchedWorkflow = workflow
 	f.dispatchedRef = ref
+	f.dispatchedInputs = inputs
 	return nil
 }
 
