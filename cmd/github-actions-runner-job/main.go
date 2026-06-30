@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,15 +14,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-github/internal"
 )
 
 const (
-	computeProtocolVersion = "compute.v1alpha1"
-	providerOperation      = "ephemeral_runner_job"
-	proofArtifactName      = "github-runner-proof.json"
+	computeProtocolVersion  = "compute.v1alpha1"
+	providerOperation       = "ephemeral_runner_job"
+	proofArtifactName       = "github-runner-proof.json"
+	defaultRunnerJobTimeout = 30 * time.Minute
 )
 
 func main() {
@@ -132,6 +135,14 @@ func decodeEphemeralRunnerRequest(input json.RawMessage) (internal.EphemeralRunn
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		return internal.EphemeralRunnerJobRequest{}, fmt.Errorf("decode ephemeral runner request: %w", err)
+	}
+	if req.TimeoutSeconds < 0 {
+		return internal.EphemeralRunnerJobRequest{}, fmt.Errorf("timeout_seconds must not be negative")
+	}
+	if req.TimeoutSeconds > 0 {
+		req.Timeout = time.Duration(req.TimeoutSeconds) * time.Second
+	} else {
+		req.Timeout = defaultRunnerJobTimeout
 	}
 	return req, nil
 }
@@ -274,7 +285,7 @@ func (d *runnerDriver) RunGitHubJob(ctx context.Context, mode internal.Ephemeral
 			_ = runner.wait()
 			return result, err
 		}
-		if err := runner.wait(); err != nil {
+		if err := runner.waitForGitHubJob(ctx); err != nil {
 			return result, err
 		}
 		return result, nil
@@ -363,8 +374,17 @@ type runningCommand struct {
 	path   string
 	cancel context.CancelFunc
 	cmd    *exec.Cmd
+	mu     sync.Mutex
 	stdout bytes.Buffer
 	stderr bytes.Buffer
+	result chan runnerCompletion
+	done   chan error
+	once   sync.Once
+}
+
+type runnerCompletion struct {
+	success bool
+	line    string
 }
 
 func startCommand(ctx context.Context, path, dir string, args ...string) (*runningCommand, error) {
@@ -372,24 +392,104 @@ func startCommand(ctx context.Context, path, dir string, args ...string) (*runni
 	cmd := exec.CommandContext(runCtx, path, args...)
 	cmd.Dir = dir
 	cmd.Env = os.Environ()
-	running := &runningCommand{path: path, cancel: cancel, cmd: cmd}
-	cmd.Stdout = &running.stdout
-	cmd.Stderr = &running.stderr
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("%s stdout pipe failed: %w", filepath.Base(path), err)
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("%s stderr pipe failed: %w", filepath.Base(path), err)
+	}
+	running := &runningCommand{
+		path:   path,
+		cancel: cancel,
+		cmd:    cmd,
+		result: make(chan runnerCompletion, 1),
+		done:   make(chan error, 1),
+	}
 	if err := cmd.Start(); err != nil {
 		cancel()
 		return nil, fmt.Errorf("%s start failed: %w", filepath.Base(path), err)
 	}
+	go running.captureOutput(stdoutPipe, &running.stdout)
+	go running.captureOutput(stderrPipe, &running.stderr)
+	go func() {
+		running.done <- cmd.Wait()
+	}()
 	return running, nil
 }
 
 func (r *runningCommand) wait() error {
-	err := r.cmd.Wait()
+	err := <-r.done
 	r.cancel()
 	if err != nil {
-		output := strings.TrimSpace(strings.Join([]string{r.stdout.String(), r.stderr.String()}, "\n"))
+		output := r.output()
 		return fmt.Errorf("%s failed: %w: %s", filepath.Base(r.path), err, output)
 	}
 	return nil
+}
+
+func (r *runningCommand) waitForGitHubJob(ctx context.Context) error {
+	select {
+	case err := <-r.done:
+		r.cancel()
+		if err != nil {
+			return fmt.Errorf("%s failed: %w: %s", filepath.Base(r.path), err, r.output())
+		}
+		return nil
+	case result := <-r.result:
+		r.cancel()
+		err := <-r.done
+		if result.success {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("%s reported failed job and exited with %w: %s", filepath.Base(r.path), err, result.line)
+		}
+		return fmt.Errorf("%s reported failed job: %s", filepath.Base(r.path), result.line)
+	case <-ctx.Done():
+		r.cancel()
+		err := <-r.done
+		if err != nil {
+			return fmt.Errorf("%s timed out waiting for GitHub job completion: %w: %s", filepath.Base(r.path), ctx.Err(), r.output())
+		}
+		return ctx.Err()
+	}
+}
+
+func (r *runningCommand) captureOutput(reader io.Reader, buffer *bytes.Buffer) {
+	scanner := bufio.NewScanner(reader)
+	for scanner.Scan() {
+		line := scanner.Text()
+		r.mu.Lock()
+		_, _ = buffer.WriteString(line)
+		_ = buffer.WriteByte('\n')
+		r.mu.Unlock()
+		if result, ok := parseRunnerCompletion(line); ok {
+			r.once.Do(func() {
+				r.result <- result
+			})
+		}
+	}
+}
+
+func (r *runningCommand) output() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return strings.TrimSpace(strings.Join([]string{r.stdout.String(), r.stderr.String()}, "\n"))
+}
+
+func parseRunnerCompletion(line string) (runnerCompletion, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(line))
+	if !strings.Contains(normalized, "completed with result:") {
+		return runnerCompletion{}, false
+	}
+	return runnerCompletion{
+		success: strings.Contains(normalized, "completed with result: succeeded") || strings.Contains(normalized, "completed with result: success"),
+		line:    strings.TrimSpace(line),
+	}, true
 }
 
 func writeProofArtifact(result internal.EphemeralRunnerJobResult) error {
