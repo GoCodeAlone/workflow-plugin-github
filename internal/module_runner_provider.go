@@ -539,7 +539,10 @@ func (m *githubRunnerProviderModule) invokeMethod(ctx context.Context, method st
 		if workflow == "" {
 			return nil, errors.New("workflow is required")
 		}
-		createdAfter, _ := args["created_after"].(time.Time)
+		createdAfter, err := timeArg(args, "created_after")
+		if err != nil {
+			return nil, err
+		}
 		runs, err := m.client.ListWorkflowRuns(ctx, owner, repo, workflow, createdAfter, m.config.Token)
 		if err != nil {
 			return nil, err
@@ -1169,6 +1172,19 @@ func int64Arg(args map[string]any, key string) (int64, error) {
 		return value, nil
 	default:
 		return 0, fmt.Errorf("%s is required", key)
+	}
+}
+
+func timeArg(args map[string]any, key string) (time.Time, error) {
+	switch v := args[key].(type) {
+	case nil:
+		return time.Time{}, nil
+	case time.Time:
+		return v, nil
+	case string:
+		return parseOptionalRFC3339Query(v, key)
+	default:
+		return time.Time{}, fmt.Errorf("%s must be RFC3339", key)
 	}
 }
 
