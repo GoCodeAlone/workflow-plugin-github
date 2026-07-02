@@ -301,6 +301,31 @@ message ReleaseUploadOutput {
   int64 size = 4;
 }
 
+// UpstreamReleaseMonitorConfig is the typed config for step.gh_upstream_release_monitor.
+message UpstreamReleaseMonitorConfig {
+  string upstream_owner = 1;
+  string upstream_repo = 2;
+  string pinned_tag = 3;
+  string token = 4;
+}
+
+// UpstreamReleaseMonitorInput carries runtime inputs for step.gh_upstream_release_monitor.
+message UpstreamReleaseMonitorInput {
+  google.protobuf.Struct data = 1;
+}
+
+// UpstreamReleaseMonitorOutput holds the result of step.gh_upstream_release_monitor.
+message UpstreamReleaseMonitorOutput {
+  string upstream_owner = 1;
+  string upstream_repo = 2;
+  string pinned_tag = 3;
+  string latest_tag = 4;
+  bool update_available = 5;
+  int64 release_id = 6;
+  string release_url = 7;
+  string published_at = 8;
+}
+
 // RepoDispatchConfig is the typed config for step.gh_repo_dispatch.
 message RepoDispatchConfig {
   string owner = 1;

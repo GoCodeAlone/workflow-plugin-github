@@ -90,6 +90,28 @@ Checks or polls the status of a GitHub Actions workflow run.
     timeout: "30m"
 ```
 
+### Step: `step.gh_upstream_release_monitor`
+
+Checks the latest release tag for an upstream GitHub repository and reports
+whether it differs from the tag your application has pinned. Public repositories
+can be checked without a token; private repositories or higher-rate checks can
+provide `token`.
+
+```yaml
+- name: check_upstream
+  type: step.gh_upstream_release_monitor
+  config:
+    upstream_owner: "{{ .upstream_owner }}"
+    upstream_repo: "{{ .upstream_repo }}"
+    pinned_tag: "{{ .pinned_tag }}"
+    token: "${GITHUB_TOKEN}"
+```
+
+The step is intentionally read-only. Compose `update_available` with
+`step.conditional`, repo-owned update workflows, `step.gh_action_trigger`,
+`step.gh_action_status`, `step.gh_pr_create`, and `step.gh_pr_merge` when an
+application should re-pin an upstream dependency.
+
 Workflow-compute workloads should be routed through a workflow-compute provider
 or through GitHub's normal self-hosted runner/webhook surfaces. This plugin does
 not expose workflow-compute gateway client steps or generic check-run creation

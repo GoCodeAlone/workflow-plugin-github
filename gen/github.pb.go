@@ -2444,6 +2444,221 @@ func (x *ReleaseUploadOutput) GetSize() int64 {
 	return 0
 }
 
+// UpstreamReleaseMonitorConfig is the typed config for step.gh_upstream_release_monitor.
+type UpstreamReleaseMonitorConfig struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UpstreamOwner string                 `protobuf:"bytes,1,opt,name=upstream_owner,json=upstreamOwner,proto3" json:"upstream_owner,omitempty"`
+	UpstreamRepo  string                 `protobuf:"bytes,2,opt,name=upstream_repo,json=upstreamRepo,proto3" json:"upstream_repo,omitempty"`
+	PinnedTag     string                 `protobuf:"bytes,3,opt,name=pinned_tag,json=pinnedTag,proto3" json:"pinned_tag,omitempty"`
+	Token         string                 `protobuf:"bytes,4,opt,name=token,proto3" json:"token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpstreamReleaseMonitorConfig) Reset() {
+	*x = UpstreamReleaseMonitorConfig{}
+	mi := &file_github_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpstreamReleaseMonitorConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpstreamReleaseMonitorConfig) ProtoMessage() {}
+
+func (x *UpstreamReleaseMonitorConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_github_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpstreamReleaseMonitorConfig.ProtoReflect.Descriptor instead.
+func (*UpstreamReleaseMonitorConfig) Descriptor() ([]byte, []int) {
+	return file_github_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *UpstreamReleaseMonitorConfig) GetUpstreamOwner() string {
+	if x != nil {
+		return x.UpstreamOwner
+	}
+	return ""
+}
+
+func (x *UpstreamReleaseMonitorConfig) GetUpstreamRepo() string {
+	if x != nil {
+		return x.UpstreamRepo
+	}
+	return ""
+}
+
+func (x *UpstreamReleaseMonitorConfig) GetPinnedTag() string {
+	if x != nil {
+		return x.PinnedTag
+	}
+	return ""
+}
+
+func (x *UpstreamReleaseMonitorConfig) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+// UpstreamReleaseMonitorInput carries runtime inputs for step.gh_upstream_release_monitor.
+type UpstreamReleaseMonitorInput struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          *structpb.Struct       `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpstreamReleaseMonitorInput) Reset() {
+	*x = UpstreamReleaseMonitorInput{}
+	mi := &file_github_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpstreamReleaseMonitorInput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpstreamReleaseMonitorInput) ProtoMessage() {}
+
+func (x *UpstreamReleaseMonitorInput) ProtoReflect() protoreflect.Message {
+	mi := &file_github_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpstreamReleaseMonitorInput.ProtoReflect.Descriptor instead.
+func (*UpstreamReleaseMonitorInput) Descriptor() ([]byte, []int) {
+	return file_github_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *UpstreamReleaseMonitorInput) GetData() *structpb.Struct {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+// UpstreamReleaseMonitorOutput holds the result of step.gh_upstream_release_monitor.
+type UpstreamReleaseMonitorOutput struct {
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	UpstreamOwner   string                 `protobuf:"bytes,1,opt,name=upstream_owner,json=upstreamOwner,proto3" json:"upstream_owner,omitempty"`
+	UpstreamRepo    string                 `protobuf:"bytes,2,opt,name=upstream_repo,json=upstreamRepo,proto3" json:"upstream_repo,omitempty"`
+	PinnedTag       string                 `protobuf:"bytes,3,opt,name=pinned_tag,json=pinnedTag,proto3" json:"pinned_tag,omitempty"`
+	LatestTag       string                 `protobuf:"bytes,4,opt,name=latest_tag,json=latestTag,proto3" json:"latest_tag,omitempty"`
+	UpdateAvailable bool                   `protobuf:"varint,5,opt,name=update_available,json=updateAvailable,proto3" json:"update_available,omitempty"`
+	ReleaseId       int64                  `protobuf:"varint,6,opt,name=release_id,json=releaseId,proto3" json:"release_id,omitempty"`
+	ReleaseUrl      string                 `protobuf:"bytes,7,opt,name=release_url,json=releaseUrl,proto3" json:"release_url,omitempty"`
+	PublishedAt     string                 `protobuf:"bytes,8,opt,name=published_at,json=publishedAt,proto3" json:"published_at,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
+}
+
+func (x *UpstreamReleaseMonitorOutput) Reset() {
+	*x = UpstreamReleaseMonitorOutput{}
+	mi := &file_github_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpstreamReleaseMonitorOutput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpstreamReleaseMonitorOutput) ProtoMessage() {}
+
+func (x *UpstreamReleaseMonitorOutput) ProtoReflect() protoreflect.Message {
+	mi := &file_github_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpstreamReleaseMonitorOutput.ProtoReflect.Descriptor instead.
+func (*UpstreamReleaseMonitorOutput) Descriptor() ([]byte, []int) {
+	return file_github_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *UpstreamReleaseMonitorOutput) GetUpstreamOwner() string {
+	if x != nil {
+		return x.UpstreamOwner
+	}
+	return ""
+}
+
+func (x *UpstreamReleaseMonitorOutput) GetUpstreamRepo() string {
+	if x != nil {
+		return x.UpstreamRepo
+	}
+	return ""
+}
+
+func (x *UpstreamReleaseMonitorOutput) GetPinnedTag() string {
+	if x != nil {
+		return x.PinnedTag
+	}
+	return ""
+}
+
+func (x *UpstreamReleaseMonitorOutput) GetLatestTag() string {
+	if x != nil {
+		return x.LatestTag
+	}
+	return ""
+}
+
+func (x *UpstreamReleaseMonitorOutput) GetUpdateAvailable() bool {
+	if x != nil {
+		return x.UpdateAvailable
+	}
+	return false
+}
+
+func (x *UpstreamReleaseMonitorOutput) GetReleaseId() int64 {
+	if x != nil {
+		return x.ReleaseId
+	}
+	return 0
+}
+
+func (x *UpstreamReleaseMonitorOutput) GetReleaseUrl() string {
+	if x != nil {
+		return x.ReleaseUrl
+	}
+	return ""
+}
+
+func (x *UpstreamReleaseMonitorOutput) GetPublishedAt() string {
+	if x != nil {
+		return x.PublishedAt
+	}
+	return ""
+}
+
 // RepoDispatchConfig is the typed config for step.gh_repo_dispatch.
 type RepoDispatchConfig struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -2458,7 +2673,7 @@ type RepoDispatchConfig struct {
 
 func (x *RepoDispatchConfig) Reset() {
 	*x = RepoDispatchConfig{}
-	mi := &file_github_proto_msgTypes[36]
+	mi := &file_github_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2470,7 +2685,7 @@ func (x *RepoDispatchConfig) String() string {
 func (*RepoDispatchConfig) ProtoMessage() {}
 
 func (x *RepoDispatchConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_github_proto_msgTypes[36]
+	mi := &file_github_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2483,7 +2698,7 @@ func (x *RepoDispatchConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RepoDispatchConfig.ProtoReflect.Descriptor instead.
 func (*RepoDispatchConfig) Descriptor() ([]byte, []int) {
-	return file_github_proto_rawDescGZIP(), []int{36}
+	return file_github_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *RepoDispatchConfig) GetOwner() string {
@@ -2531,7 +2746,7 @@ type RepoDispatchInput struct {
 
 func (x *RepoDispatchInput) Reset() {
 	*x = RepoDispatchInput{}
-	mi := &file_github_proto_msgTypes[37]
+	mi := &file_github_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2543,7 +2758,7 @@ func (x *RepoDispatchInput) String() string {
 func (*RepoDispatchInput) ProtoMessage() {}
 
 func (x *RepoDispatchInput) ProtoReflect() protoreflect.Message {
-	mi := &file_github_proto_msgTypes[37]
+	mi := &file_github_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2556,7 +2771,7 @@ func (x *RepoDispatchInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RepoDispatchInput.ProtoReflect.Descriptor instead.
 func (*RepoDispatchInput) Descriptor() ([]byte, []int) {
-	return file_github_proto_rawDescGZIP(), []int{37}
+	return file_github_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *RepoDispatchInput) GetData() *structpb.Struct {
@@ -2579,7 +2794,7 @@ type RepoDispatchOutput struct {
 
 func (x *RepoDispatchOutput) Reset() {
 	*x = RepoDispatchOutput{}
-	mi := &file_github_proto_msgTypes[38]
+	mi := &file_github_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2591,7 +2806,7 @@ func (x *RepoDispatchOutput) String() string {
 func (*RepoDispatchOutput) ProtoMessage() {}
 
 func (x *RepoDispatchOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_github_proto_msgTypes[38]
+	mi := &file_github_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2604,7 +2819,7 @@ func (x *RepoDispatchOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RepoDispatchOutput.ProtoReflect.Descriptor instead.
 func (*RepoDispatchOutput) Descriptor() ([]byte, []int) {
-	return file_github_proto_rawDescGZIP(), []int{38}
+	return file_github_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *RepoDispatchOutput) GetDispatched() bool {
@@ -2651,7 +2866,7 @@ type DeploymentCreateConfig struct {
 
 func (x *DeploymentCreateConfig) Reset() {
 	*x = DeploymentCreateConfig{}
-	mi := &file_github_proto_msgTypes[39]
+	mi := &file_github_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2663,7 +2878,7 @@ func (x *DeploymentCreateConfig) String() string {
 func (*DeploymentCreateConfig) ProtoMessage() {}
 
 func (x *DeploymentCreateConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_github_proto_msgTypes[39]
+	mi := &file_github_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2676,7 +2891,7 @@ func (x *DeploymentCreateConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeploymentCreateConfig.ProtoReflect.Descriptor instead.
 func (*DeploymentCreateConfig) Descriptor() ([]byte, []int) {
-	return file_github_proto_rawDescGZIP(), []int{39}
+	return file_github_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *DeploymentCreateConfig) GetOwner() string {
@@ -2738,7 +2953,7 @@ type DeploymentCreateInput struct {
 
 func (x *DeploymentCreateInput) Reset() {
 	*x = DeploymentCreateInput{}
-	mi := &file_github_proto_msgTypes[40]
+	mi := &file_github_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2750,7 +2965,7 @@ func (x *DeploymentCreateInput) String() string {
 func (*DeploymentCreateInput) ProtoMessage() {}
 
 func (x *DeploymentCreateInput) ProtoReflect() protoreflect.Message {
-	mi := &file_github_proto_msgTypes[40]
+	mi := &file_github_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2763,7 +2978,7 @@ func (x *DeploymentCreateInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeploymentCreateInput.ProtoReflect.Descriptor instead.
 func (*DeploymentCreateInput) Descriptor() ([]byte, []int) {
-	return file_github_proto_rawDescGZIP(), []int{40}
+	return file_github_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *DeploymentCreateInput) GetData() *structpb.Struct {
@@ -2787,7 +3002,7 @@ type DeploymentCreateOutput struct {
 
 func (x *DeploymentCreateOutput) Reset() {
 	*x = DeploymentCreateOutput{}
-	mi := &file_github_proto_msgTypes[41]
+	mi := &file_github_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2799,7 +3014,7 @@ func (x *DeploymentCreateOutput) String() string {
 func (*DeploymentCreateOutput) ProtoMessage() {}
 
 func (x *DeploymentCreateOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_github_proto_msgTypes[41]
+	mi := &file_github_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2812,7 +3027,7 @@ func (x *DeploymentCreateOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeploymentCreateOutput.ProtoReflect.Descriptor instead.
 func (*DeploymentCreateOutput) Descriptor() ([]byte, []int) {
-	return file_github_proto_rawDescGZIP(), []int{41}
+	return file_github_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *DeploymentCreateOutput) GetDeploymentId() int64 {
@@ -2864,7 +3079,7 @@ type SecretSetConfig struct {
 
 func (x *SecretSetConfig) Reset() {
 	*x = SecretSetConfig{}
-	mi := &file_github_proto_msgTypes[42]
+	mi := &file_github_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2876,7 +3091,7 @@ func (x *SecretSetConfig) String() string {
 func (*SecretSetConfig) ProtoMessage() {}
 
 func (x *SecretSetConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_github_proto_msgTypes[42]
+	mi := &file_github_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2889,7 +3104,7 @@ func (x *SecretSetConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecretSetConfig.ProtoReflect.Descriptor instead.
 func (*SecretSetConfig) Descriptor() ([]byte, []int) {
-	return file_github_proto_rawDescGZIP(), []int{42}
+	return file_github_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *SecretSetConfig) GetOwner() string {
@@ -2937,7 +3152,7 @@ type SecretSetInput struct {
 
 func (x *SecretSetInput) Reset() {
 	*x = SecretSetInput{}
-	mi := &file_github_proto_msgTypes[43]
+	mi := &file_github_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2949,7 +3164,7 @@ func (x *SecretSetInput) String() string {
 func (*SecretSetInput) ProtoMessage() {}
 
 func (x *SecretSetInput) ProtoReflect() protoreflect.Message {
-	mi := &file_github_proto_msgTypes[43]
+	mi := &file_github_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2962,7 +3177,7 @@ func (x *SecretSetInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecretSetInput.ProtoReflect.Descriptor instead.
 func (*SecretSetInput) Descriptor() ([]byte, []int) {
-	return file_github_proto_rawDescGZIP(), []int{43}
+	return file_github_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *SecretSetInput) GetData() *structpb.Struct {
@@ -2985,7 +3200,7 @@ type SecretSetOutput struct {
 
 func (x *SecretSetOutput) Reset() {
 	*x = SecretSetOutput{}
-	mi := &file_github_proto_msgTypes[44]
+	mi := &file_github_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2997,7 +3212,7 @@ func (x *SecretSetOutput) String() string {
 func (*SecretSetOutput) ProtoMessage() {}
 
 func (x *SecretSetOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_github_proto_msgTypes[44]
+	mi := &file_github_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3010,7 +3225,7 @@ func (x *SecretSetOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SecretSetOutput.ProtoReflect.Descriptor instead.
 func (*SecretSetOutput) Descriptor() ([]byte, []int) {
-	return file_github_proto_rawDescGZIP(), []int{44}
+	return file_github_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *SecretSetOutput) GetName() string {
@@ -3053,7 +3268,7 @@ type GraphQLConfig struct {
 
 func (x *GraphQLConfig) Reset() {
 	*x = GraphQLConfig{}
-	mi := &file_github_proto_msgTypes[45]
+	mi := &file_github_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3065,7 +3280,7 @@ func (x *GraphQLConfig) String() string {
 func (*GraphQLConfig) ProtoMessage() {}
 
 func (x *GraphQLConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_github_proto_msgTypes[45]
+	mi := &file_github_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3078,7 +3293,7 @@ func (x *GraphQLConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GraphQLConfig.ProtoReflect.Descriptor instead.
 func (*GraphQLConfig) Descriptor() ([]byte, []int) {
-	return file_github_proto_rawDescGZIP(), []int{45}
+	return file_github_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *GraphQLConfig) GetQuery() string {
@@ -3112,7 +3327,7 @@ type GraphQLInput struct {
 
 func (x *GraphQLInput) Reset() {
 	*x = GraphQLInput{}
-	mi := &file_github_proto_msgTypes[46]
+	mi := &file_github_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3124,7 +3339,7 @@ func (x *GraphQLInput) String() string {
 func (*GraphQLInput) ProtoMessage() {}
 
 func (x *GraphQLInput) ProtoReflect() protoreflect.Message {
-	mi := &file_github_proto_msgTypes[46]
+	mi := &file_github_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3137,7 +3352,7 @@ func (x *GraphQLInput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GraphQLInput.ProtoReflect.Descriptor instead.
 func (*GraphQLInput) Descriptor() ([]byte, []int) {
-	return file_github_proto_rawDescGZIP(), []int{46}
+	return file_github_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *GraphQLInput) GetData() *structpb.Struct {
@@ -3158,7 +3373,7 @@ type GraphQLOutput struct {
 
 func (x *GraphQLOutput) Reset() {
 	*x = GraphQLOutput{}
-	mi := &file_github_proto_msgTypes[47]
+	mi := &file_github_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3170,7 +3385,7 @@ func (x *GraphQLOutput) String() string {
 func (*GraphQLOutput) ProtoMessage() {}
 
 func (x *GraphQLOutput) ProtoReflect() protoreflect.Message {
-	mi := &file_github_proto_msgTypes[47]
+	mi := &file_github_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3183,7 +3398,7 @@ func (x *GraphQLOutput) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GraphQLOutput.ProtoReflect.Descriptor instead.
 func (*GraphQLOutput) Descriptor() ([]byte, []int) {
-	return file_github_proto_rawDescGZIP(), []int{47}
+	return file_github_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *GraphQLOutput) GetData() *structpb.Struct {
@@ -3386,7 +3601,28 @@ const file_github_proto_rawDesc = "" +
 	"\basset_id\x18\x01 \x01(\x03R\aassetId\x12\x10\n" +
 	"\x03url\x18\x02 \x01(\tR\x03url\x12\x12\n" +
 	"\x04name\x18\x03 \x01(\tR\x04name\x12\x12\n" +
-	"\x04size\x18\x04 \x01(\x03R\x04size\"\xa6\x01\n" +
+	"\x04size\x18\x04 \x01(\x03R\x04size\"\x9f\x01\n" +
+	"\x1cUpstreamReleaseMonitorConfig\x12%\n" +
+	"\x0eupstream_owner\x18\x01 \x01(\tR\rupstreamOwner\x12#\n" +
+	"\rupstream_repo\x18\x02 \x01(\tR\fupstreamRepo\x12\x1d\n" +
+	"\n" +
+	"pinned_tag\x18\x03 \x01(\tR\tpinnedTag\x12\x14\n" +
+	"\x05token\x18\x04 \x01(\tR\x05token\"J\n" +
+	"\x1bUpstreamReleaseMonitorInput\x12+\n" +
+	"\x04data\x18\x01 \x01(\v2\x17.google.protobuf.StructR\x04data\"\xb6\x02\n" +
+	"\x1cUpstreamReleaseMonitorOutput\x12%\n" +
+	"\x0eupstream_owner\x18\x01 \x01(\tR\rupstreamOwner\x12#\n" +
+	"\rupstream_repo\x18\x02 \x01(\tR\fupstreamRepo\x12\x1d\n" +
+	"\n" +
+	"pinned_tag\x18\x03 \x01(\tR\tpinnedTag\x12\x1d\n" +
+	"\n" +
+	"latest_tag\x18\x04 \x01(\tR\tlatestTag\x12)\n" +
+	"\x10update_available\x18\x05 \x01(\bR\x0fupdateAvailable\x12\x1d\n" +
+	"\n" +
+	"release_id\x18\x06 \x01(\x03R\treleaseId\x12\x1f\n" +
+	"\vrelease_url\x18\a \x01(\tR\n" +
+	"releaseUrl\x12!\n" +
+	"\fpublished_at\x18\b \x01(\tR\vpublishedAt\"\xa6\x01\n" +
 	"\x12RepoDispatchConfig\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x12\n" +
 	"\x04repo\x18\x02 \x01(\tR\x04repo\x12\x1d\n" +
@@ -3456,83 +3692,87 @@ func file_github_proto_rawDescGZIP() []byte {
 	return file_github_proto_rawDescData
 }
 
-var file_github_proto_msgTypes = make([]protoimpl.MessageInfo, 48)
+var file_github_proto_msgTypes = make([]protoimpl.MessageInfo, 51)
 var file_github_proto_goTypes = []any{
-	(*WebhookModuleConfig)(nil),        // 0: workflow.plugin.github.v1.WebhookModuleConfig
-	(*GitHubAppModuleConfig)(nil),      // 1: workflow.plugin.github.v1.GitHubAppModuleConfig
-	(*RunnerProviderModuleConfig)(nil), // 2: workflow.plugin.github.v1.RunnerProviderModuleConfig
-	(*ActionTriggerConfig)(nil),        // 3: workflow.plugin.github.v1.ActionTriggerConfig
-	(*ActionTriggerInput)(nil),         // 4: workflow.plugin.github.v1.ActionTriggerInput
-	(*ActionTriggerOutput)(nil),        // 5: workflow.plugin.github.v1.ActionTriggerOutput
-	(*ActionStatusConfig)(nil),         // 6: workflow.plugin.github.v1.ActionStatusConfig
-	(*ActionStatusInput)(nil),          // 7: workflow.plugin.github.v1.ActionStatusInput
-	(*ActionStatusOutput)(nil),         // 8: workflow.plugin.github.v1.ActionStatusOutput
-	(*PRCreateConfig)(nil),             // 9: workflow.plugin.github.v1.PRCreateConfig
-	(*PRCreateInput)(nil),              // 10: workflow.plugin.github.v1.PRCreateInput
-	(*PRCreateOutput)(nil),             // 11: workflow.plugin.github.v1.PRCreateOutput
-	(*PRMergeConfig)(nil),              // 12: workflow.plugin.github.v1.PRMergeConfig
-	(*PRMergeInput)(nil),               // 13: workflow.plugin.github.v1.PRMergeInput
-	(*PRMergeOutput)(nil),              // 14: workflow.plugin.github.v1.PRMergeOutput
-	(*PRCommentConfig)(nil),            // 15: workflow.plugin.github.v1.PRCommentConfig
-	(*PRCommentInput)(nil),             // 16: workflow.plugin.github.v1.PRCommentInput
-	(*PRCommentOutput)(nil),            // 17: workflow.plugin.github.v1.PRCommentOutput
-	(*PRReviewConfig)(nil),             // 18: workflow.plugin.github.v1.PRReviewConfig
-	(*PRReviewInput)(nil),              // 19: workflow.plugin.github.v1.PRReviewInput
-	(*PRReviewOutput)(nil),             // 20: workflow.plugin.github.v1.PRReviewOutput
-	(*IssueCreateConfig)(nil),          // 21: workflow.plugin.github.v1.IssueCreateConfig
-	(*IssueCreateInput)(nil),           // 22: workflow.plugin.github.v1.IssueCreateInput
-	(*IssueCreateOutput)(nil),          // 23: workflow.plugin.github.v1.IssueCreateOutput
-	(*IssueCloseConfig)(nil),           // 24: workflow.plugin.github.v1.IssueCloseConfig
-	(*IssueCloseInput)(nil),            // 25: workflow.plugin.github.v1.IssueCloseInput
-	(*IssueCloseOutput)(nil),           // 26: workflow.plugin.github.v1.IssueCloseOutput
-	(*IssueLabelConfig)(nil),           // 27: workflow.plugin.github.v1.IssueLabelConfig
-	(*IssueLabelInput)(nil),            // 28: workflow.plugin.github.v1.IssueLabelInput
-	(*IssueLabelOutput)(nil),           // 29: workflow.plugin.github.v1.IssueLabelOutput
-	(*ReleaseCreateConfig)(nil),        // 30: workflow.plugin.github.v1.ReleaseCreateConfig
-	(*ReleaseCreateInput)(nil),         // 31: workflow.plugin.github.v1.ReleaseCreateInput
-	(*ReleaseCreateOutput)(nil),        // 32: workflow.plugin.github.v1.ReleaseCreateOutput
-	(*ReleaseUploadConfig)(nil),        // 33: workflow.plugin.github.v1.ReleaseUploadConfig
-	(*ReleaseUploadInput)(nil),         // 34: workflow.plugin.github.v1.ReleaseUploadInput
-	(*ReleaseUploadOutput)(nil),        // 35: workflow.plugin.github.v1.ReleaseUploadOutput
-	(*RepoDispatchConfig)(nil),         // 36: workflow.plugin.github.v1.RepoDispatchConfig
-	(*RepoDispatchInput)(nil),          // 37: workflow.plugin.github.v1.RepoDispatchInput
-	(*RepoDispatchOutput)(nil),         // 38: workflow.plugin.github.v1.RepoDispatchOutput
-	(*DeploymentCreateConfig)(nil),     // 39: workflow.plugin.github.v1.DeploymentCreateConfig
-	(*DeploymentCreateInput)(nil),      // 40: workflow.plugin.github.v1.DeploymentCreateInput
-	(*DeploymentCreateOutput)(nil),     // 41: workflow.plugin.github.v1.DeploymentCreateOutput
-	(*SecretSetConfig)(nil),            // 42: workflow.plugin.github.v1.SecretSetConfig
-	(*SecretSetInput)(nil),             // 43: workflow.plugin.github.v1.SecretSetInput
-	(*SecretSetOutput)(nil),            // 44: workflow.plugin.github.v1.SecretSetOutput
-	(*GraphQLConfig)(nil),              // 45: workflow.plugin.github.v1.GraphQLConfig
-	(*GraphQLInput)(nil),               // 46: workflow.plugin.github.v1.GraphQLInput
-	(*GraphQLOutput)(nil),              // 47: workflow.plugin.github.v1.GraphQLOutput
-	(*structpb.Struct)(nil),            // 48: google.protobuf.Struct
+	(*WebhookModuleConfig)(nil),          // 0: workflow.plugin.github.v1.WebhookModuleConfig
+	(*GitHubAppModuleConfig)(nil),        // 1: workflow.plugin.github.v1.GitHubAppModuleConfig
+	(*RunnerProviderModuleConfig)(nil),   // 2: workflow.plugin.github.v1.RunnerProviderModuleConfig
+	(*ActionTriggerConfig)(nil),          // 3: workflow.plugin.github.v1.ActionTriggerConfig
+	(*ActionTriggerInput)(nil),           // 4: workflow.plugin.github.v1.ActionTriggerInput
+	(*ActionTriggerOutput)(nil),          // 5: workflow.plugin.github.v1.ActionTriggerOutput
+	(*ActionStatusConfig)(nil),           // 6: workflow.plugin.github.v1.ActionStatusConfig
+	(*ActionStatusInput)(nil),            // 7: workflow.plugin.github.v1.ActionStatusInput
+	(*ActionStatusOutput)(nil),           // 8: workflow.plugin.github.v1.ActionStatusOutput
+	(*PRCreateConfig)(nil),               // 9: workflow.plugin.github.v1.PRCreateConfig
+	(*PRCreateInput)(nil),                // 10: workflow.plugin.github.v1.PRCreateInput
+	(*PRCreateOutput)(nil),               // 11: workflow.plugin.github.v1.PRCreateOutput
+	(*PRMergeConfig)(nil),                // 12: workflow.plugin.github.v1.PRMergeConfig
+	(*PRMergeInput)(nil),                 // 13: workflow.plugin.github.v1.PRMergeInput
+	(*PRMergeOutput)(nil),                // 14: workflow.plugin.github.v1.PRMergeOutput
+	(*PRCommentConfig)(nil),              // 15: workflow.plugin.github.v1.PRCommentConfig
+	(*PRCommentInput)(nil),               // 16: workflow.plugin.github.v1.PRCommentInput
+	(*PRCommentOutput)(nil),              // 17: workflow.plugin.github.v1.PRCommentOutput
+	(*PRReviewConfig)(nil),               // 18: workflow.plugin.github.v1.PRReviewConfig
+	(*PRReviewInput)(nil),                // 19: workflow.plugin.github.v1.PRReviewInput
+	(*PRReviewOutput)(nil),               // 20: workflow.plugin.github.v1.PRReviewOutput
+	(*IssueCreateConfig)(nil),            // 21: workflow.plugin.github.v1.IssueCreateConfig
+	(*IssueCreateInput)(nil),             // 22: workflow.plugin.github.v1.IssueCreateInput
+	(*IssueCreateOutput)(nil),            // 23: workflow.plugin.github.v1.IssueCreateOutput
+	(*IssueCloseConfig)(nil),             // 24: workflow.plugin.github.v1.IssueCloseConfig
+	(*IssueCloseInput)(nil),              // 25: workflow.plugin.github.v1.IssueCloseInput
+	(*IssueCloseOutput)(nil),             // 26: workflow.plugin.github.v1.IssueCloseOutput
+	(*IssueLabelConfig)(nil),             // 27: workflow.plugin.github.v1.IssueLabelConfig
+	(*IssueLabelInput)(nil),              // 28: workflow.plugin.github.v1.IssueLabelInput
+	(*IssueLabelOutput)(nil),             // 29: workflow.plugin.github.v1.IssueLabelOutput
+	(*ReleaseCreateConfig)(nil),          // 30: workflow.plugin.github.v1.ReleaseCreateConfig
+	(*ReleaseCreateInput)(nil),           // 31: workflow.plugin.github.v1.ReleaseCreateInput
+	(*ReleaseCreateOutput)(nil),          // 32: workflow.plugin.github.v1.ReleaseCreateOutput
+	(*ReleaseUploadConfig)(nil),          // 33: workflow.plugin.github.v1.ReleaseUploadConfig
+	(*ReleaseUploadInput)(nil),           // 34: workflow.plugin.github.v1.ReleaseUploadInput
+	(*ReleaseUploadOutput)(nil),          // 35: workflow.plugin.github.v1.ReleaseUploadOutput
+	(*UpstreamReleaseMonitorConfig)(nil), // 36: workflow.plugin.github.v1.UpstreamReleaseMonitorConfig
+	(*UpstreamReleaseMonitorInput)(nil),  // 37: workflow.plugin.github.v1.UpstreamReleaseMonitorInput
+	(*UpstreamReleaseMonitorOutput)(nil), // 38: workflow.plugin.github.v1.UpstreamReleaseMonitorOutput
+	(*RepoDispatchConfig)(nil),           // 39: workflow.plugin.github.v1.RepoDispatchConfig
+	(*RepoDispatchInput)(nil),            // 40: workflow.plugin.github.v1.RepoDispatchInput
+	(*RepoDispatchOutput)(nil),           // 41: workflow.plugin.github.v1.RepoDispatchOutput
+	(*DeploymentCreateConfig)(nil),       // 42: workflow.plugin.github.v1.DeploymentCreateConfig
+	(*DeploymentCreateInput)(nil),        // 43: workflow.plugin.github.v1.DeploymentCreateInput
+	(*DeploymentCreateOutput)(nil),       // 44: workflow.plugin.github.v1.DeploymentCreateOutput
+	(*SecretSetConfig)(nil),              // 45: workflow.plugin.github.v1.SecretSetConfig
+	(*SecretSetInput)(nil),               // 46: workflow.plugin.github.v1.SecretSetInput
+	(*SecretSetOutput)(nil),              // 47: workflow.plugin.github.v1.SecretSetOutput
+	(*GraphQLConfig)(nil),                // 48: workflow.plugin.github.v1.GraphQLConfig
+	(*GraphQLInput)(nil),                 // 49: workflow.plugin.github.v1.GraphQLInput
+	(*GraphQLOutput)(nil),                // 50: workflow.plugin.github.v1.GraphQLOutput
+	(*structpb.Struct)(nil),              // 51: google.protobuf.Struct
 }
 var file_github_proto_depIdxs = []int32{
-	48, // 0: workflow.plugin.github.v1.ActionTriggerConfig.inputs:type_name -> google.protobuf.Struct
-	48, // 1: workflow.plugin.github.v1.ActionTriggerInput.data:type_name -> google.protobuf.Struct
-	48, // 2: workflow.plugin.github.v1.ActionStatusInput.data:type_name -> google.protobuf.Struct
-	48, // 3: workflow.plugin.github.v1.PRCreateInput.data:type_name -> google.protobuf.Struct
-	48, // 4: workflow.plugin.github.v1.PRMergeInput.data:type_name -> google.protobuf.Struct
-	48, // 5: workflow.plugin.github.v1.PRCommentInput.data:type_name -> google.protobuf.Struct
-	48, // 6: workflow.plugin.github.v1.PRReviewInput.data:type_name -> google.protobuf.Struct
-	48, // 7: workflow.plugin.github.v1.IssueCreateInput.data:type_name -> google.protobuf.Struct
-	48, // 8: workflow.plugin.github.v1.IssueCloseInput.data:type_name -> google.protobuf.Struct
-	48, // 9: workflow.plugin.github.v1.IssueLabelInput.data:type_name -> google.protobuf.Struct
-	48, // 10: workflow.plugin.github.v1.ReleaseCreateInput.data:type_name -> google.protobuf.Struct
-	48, // 11: workflow.plugin.github.v1.ReleaseUploadInput.data:type_name -> google.protobuf.Struct
-	48, // 12: workflow.plugin.github.v1.RepoDispatchConfig.payload:type_name -> google.protobuf.Struct
-	48, // 13: workflow.plugin.github.v1.RepoDispatchInput.data:type_name -> google.protobuf.Struct
-	48, // 14: workflow.plugin.github.v1.DeploymentCreateInput.data:type_name -> google.protobuf.Struct
-	48, // 15: workflow.plugin.github.v1.SecretSetInput.data:type_name -> google.protobuf.Struct
-	48, // 16: workflow.plugin.github.v1.GraphQLConfig.variables:type_name -> google.protobuf.Struct
-	48, // 17: workflow.plugin.github.v1.GraphQLInput.data:type_name -> google.protobuf.Struct
-	48, // 18: workflow.plugin.github.v1.GraphQLOutput.data:type_name -> google.protobuf.Struct
-	19, // [19:19] is the sub-list for method output_type
-	19, // [19:19] is the sub-list for method input_type
-	19, // [19:19] is the sub-list for extension type_name
-	19, // [19:19] is the sub-list for extension extendee
-	0,  // [0:19] is the sub-list for field type_name
+	51, // 0: workflow.plugin.github.v1.ActionTriggerConfig.inputs:type_name -> google.protobuf.Struct
+	51, // 1: workflow.plugin.github.v1.ActionTriggerInput.data:type_name -> google.protobuf.Struct
+	51, // 2: workflow.plugin.github.v1.ActionStatusInput.data:type_name -> google.protobuf.Struct
+	51, // 3: workflow.plugin.github.v1.PRCreateInput.data:type_name -> google.protobuf.Struct
+	51, // 4: workflow.plugin.github.v1.PRMergeInput.data:type_name -> google.protobuf.Struct
+	51, // 5: workflow.plugin.github.v1.PRCommentInput.data:type_name -> google.protobuf.Struct
+	51, // 6: workflow.plugin.github.v1.PRReviewInput.data:type_name -> google.protobuf.Struct
+	51, // 7: workflow.plugin.github.v1.IssueCreateInput.data:type_name -> google.protobuf.Struct
+	51, // 8: workflow.plugin.github.v1.IssueCloseInput.data:type_name -> google.protobuf.Struct
+	51, // 9: workflow.plugin.github.v1.IssueLabelInput.data:type_name -> google.protobuf.Struct
+	51, // 10: workflow.plugin.github.v1.ReleaseCreateInput.data:type_name -> google.protobuf.Struct
+	51, // 11: workflow.plugin.github.v1.ReleaseUploadInput.data:type_name -> google.protobuf.Struct
+	51, // 12: workflow.plugin.github.v1.UpstreamReleaseMonitorInput.data:type_name -> google.protobuf.Struct
+	51, // 13: workflow.plugin.github.v1.RepoDispatchConfig.payload:type_name -> google.protobuf.Struct
+	51, // 14: workflow.plugin.github.v1.RepoDispatchInput.data:type_name -> google.protobuf.Struct
+	51, // 15: workflow.plugin.github.v1.DeploymentCreateInput.data:type_name -> google.protobuf.Struct
+	51, // 16: workflow.plugin.github.v1.SecretSetInput.data:type_name -> google.protobuf.Struct
+	51, // 17: workflow.plugin.github.v1.GraphQLConfig.variables:type_name -> google.protobuf.Struct
+	51, // 18: workflow.plugin.github.v1.GraphQLInput.data:type_name -> google.protobuf.Struct
+	51, // 19: workflow.plugin.github.v1.GraphQLOutput.data:type_name -> google.protobuf.Struct
+	20, // [20:20] is the sub-list for method output_type
+	20, // [20:20] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_github_proto_init() }
@@ -3546,7 +3786,7 @@ func file_github_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_github_proto_rawDesc), len(file_github_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   48,
+			NumMessages:   51,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

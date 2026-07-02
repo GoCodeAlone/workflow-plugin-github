@@ -109,6 +109,14 @@
     },
     {
       "kind": "step",
+      "type": "step.gh_upstream_release_monitor",
+      "mode": "strict_proto",
+      "config": "workflow.plugin.github.v1.UpstreamReleaseMonitorConfig",
+      "input": "workflow.plugin.github.v1.UpstreamReleaseMonitorInput",
+      "output": "workflow.plugin.github.v1.UpstreamReleaseMonitorOutput"
+    },
+    {
+      "kind": "step",
       "type": "step.gh_repo_dispatch",
       "mode": "strict_proto",
       "config": "workflow.plugin.github.v1.RepoDispatchConfig",

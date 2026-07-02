@@ -138,6 +138,14 @@ var githubContractRegistry = &pb.ContractRegistry{
 		},
 		{
 			Kind:          pb.ContractKind_CONTRACT_KIND_STEP,
+			StepType:      "step.gh_upstream_release_monitor",
+			ConfigMessage: githubProtoPkg + "UpstreamReleaseMonitorConfig",
+			InputMessage:  githubProtoPkg + "UpstreamReleaseMonitorInput",
+			OutputMessage: githubProtoPkg + "UpstreamReleaseMonitorOutput",
+			Mode:          pb.ContractMode_CONTRACT_MODE_STRICT_PROTO,
+		},
+		{
+			Kind:          pb.ContractKind_CONTRACT_KIND_STEP,
 			StepType:      "step.gh_repo_dispatch",
 			ConfigMessage: githubProtoPkg + "RepoDispatchConfig",
 			InputMessage:  githubProtoPkg + "RepoDispatchInput",
