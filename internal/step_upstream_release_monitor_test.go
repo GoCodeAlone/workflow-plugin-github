@@ -193,3 +193,34 @@ func TestGitHubPluginCreateStep_UpstreamReleaseMonitor(t *testing.T) {
 		t.Fatalf("CreateStep returned %T, want *upstreamReleaseMonitorStep", step)
 	}
 }
+
+func TestGitHubReleaseLookupContextAddsDefaultTimeout(t *testing.T) {
+	ctx, cancel := githubReleaseLookupContext(context.Background())
+	defer cancel()
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("expected deadline")
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 || remaining > 30*time.Second {
+		t.Fatalf("deadline remaining = %s, want within 30s", remaining)
+	}
+}
+
+func TestGitHubReleaseLookupContextPreservesCallerDeadline(t *testing.T) {
+	callerDeadline := time.Now().Add(5 * time.Second)
+	parent, parentCancel := context.WithDeadline(context.Background(), callerDeadline)
+	defer parentCancel()
+
+	ctx, cancel := githubReleaseLookupContext(parent)
+	defer cancel()
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatal("expected deadline")
+	}
+	if !deadline.Equal(callerDeadline) {
+		t.Fatalf("deadline = %s, want caller deadline %s", deadline, callerDeadline)
+	}
+}

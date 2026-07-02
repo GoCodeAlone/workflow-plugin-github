@@ -109,7 +109,10 @@ func (githubUpstreamReleaseClient) LatestRelease(ctx context.Context, owner, rep
 		client = client.WithAuthToken(token)
 	}
 
-	release, _, err := client.Repositories.GetLatestRelease(ctx, owner, repo)
+	requestCtx, cancel := githubReleaseLookupContext(ctx)
+	defer cancel()
+
+	release, _, err := client.Repositories.GetLatestRelease(requestCtx, owner, repo)
 	if err != nil {
 		return upstreamReleaseInfo{}, err
 	}
@@ -127,4 +130,11 @@ func (githubUpstreamReleaseClient) LatestRelease(ctx context.Context, owner, rep
 		HTMLURL:     release.GetHTMLURL(),
 		PublishedAt: publishedAt,
 	}, nil
+}
+
+func githubReleaseLookupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, 30*time.Second)
 }

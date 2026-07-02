@@ -1,6 +1,5 @@
 # GitHub Upstream Release Monitor Plan
 
-**Status:** Locked 2026-07-02T21:56:54Z
 **Date:** 2026-07-02
 **Design:** docs/plans/2026-07-02-upstream-release-monitor-design.md
 
@@ -21,7 +20,7 @@
 |------|-------|-------|--------|
 | 1 | Add upstream release monitor step | Task 1, Task 2, Task 3, Task 4 | feat/upstream-release-monitor |
 
-**Status:** Draft
+**Status:** Locked 2026-07-02T21:56:54Z
 
 ### Task 1: Record Boundary
 
