@@ -63,6 +63,7 @@ func TestContractRegistry_CoversAllStepTypes(t *testing.T) {
 		"step.gh_issue_label",
 		"step.gh_release_create",
 		"step.gh_release_upload",
+		"step.gh_upstream_release_monitor",
 		"step.gh_repo_dispatch",
 		"step.gh_deployment_create",
 		"step.gh_secret_set",
@@ -115,8 +116,8 @@ func TestT916_GitHubPluginDoesNotExposeComputeGatewayOrSyntheticCheckSteps(t *te
 func TestContractRegistry_ContractCount(t *testing.T) {
 	p := &githubPlugin{}
 	reg := p.ContractRegistry()
-	// 3 modules + 15 steps = 18 total
-	if len(reg.Contracts) != 18 {
-		t.Errorf("expected 18 contracts (3 modules + 15 steps), got %d", len(reg.Contracts))
+	// 3 modules + 16 steps = 19 total
+	if len(reg.Contracts) != 19 {
+		t.Errorf("expected 19 contracts (3 modules + 16 steps), got %d", len(reg.Contracts))
 	}
 }

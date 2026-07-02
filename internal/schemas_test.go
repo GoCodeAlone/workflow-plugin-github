@@ -250,7 +250,7 @@ func TestStepSchemaFieldContracts(t *testing.T) {
 	for _, s := range manifest.StepSchemas {
 		fields := fieldsByKey(s)
 		if tok, ok := fields["token"]; ok {
-			if !tok.Required {
+			if !tok.Required && s.Type != "step.gh_upstream_release_monitor" {
 				t.Errorf("%s: token field must be required=true (step fails at runtime without it)", s.Type)
 			}
 			if !tok.Sensitive {

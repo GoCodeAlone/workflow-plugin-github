@@ -83,6 +83,7 @@ func (p *githubPlugin) StepTypes() []string {
 		// Release steps
 		"step.gh_release_create",
 		"step.gh_release_upload",
+		"step.gh_upstream_release_monitor",
 		// Repository steps
 		"step.gh_repo_dispatch",
 		"step.gh_deployment_create",
@@ -117,6 +118,8 @@ func (p *githubPlugin) CreateStep(typeName, name string, config map[string]any) 
 		return newReleaseCreateStep(name, config)
 	case "step.gh_release_upload":
 		return newReleaseUploadStep(name, config)
+	case "step.gh_upstream_release_monitor":
+		return newUpstreamReleaseMonitorStep(name, config, nil)
 	case "step.gh_repo_dispatch":
 		return newRepoDispatchStep(name, config)
 	case "step.gh_deployment_create":

@@ -58,6 +58,7 @@
         "step.gh_issue_label",
         "step.gh_release_create",
         "step.gh_release_upload",
+        "step.gh_upstream_release_monitor",
         "step.gh_repo_dispatch",
         "step.gh_deployment_create",
         "step.gh_secret_set",
@@ -79,6 +80,7 @@
             "step.gh_issue_label",
             "step.gh_release_create",
             "step.gh_release_upload",
+            "step.gh_upstream_release_monitor",
             "step.gh_repo_dispatch",
             "step.gh_deployment_create",
             "step.gh_secret_set",
@@ -192,6 +194,14 @@
             "config": "workflow.plugin.github.v1.ReleaseUploadConfig",
             "input": "workflow.plugin.github.v1.ReleaseUploadInput",
             "output": "workflow.plugin.github.v1.ReleaseUploadOutput"
+        },
+        {
+            "kind": "step",
+            "type": "step.gh_upstream_release_monitor",
+            "mode": "strict_proto",
+            "config": "workflow.plugin.github.v1.UpstreamReleaseMonitorConfig",
+            "input": "workflow.plugin.github.v1.UpstreamReleaseMonitorInput",
+            "output": "workflow.plugin.github.v1.UpstreamReleaseMonitorOutput"
         },
         {
             "kind": "step",
@@ -434,6 +444,27 @@
                 {"key": "url", "type": "string", "description": "Asset download URL"},
                 {"key": "name", "type": "string", "description": "Asset name"},
                 {"key": "size", "type": "number", "description": "Asset file size in bytes"}
+            ]
+        },
+        {
+            "type": "step.gh_upstream_release_monitor",
+            "plugin": "workflow-plugin-github",
+            "description": "Checks the latest release tag for an upstream GitHub repository and reports whether it differs from a pinned tag.",
+            "configFields": [
+                {"key": "upstream_owner", "type": "string", "description": "Upstream GitHub repository owner", "required": true},
+                {"key": "upstream_repo", "type": "string", "description": "Upstream GitHub repository name", "required": true},
+                {"key": "pinned_tag", "type": "string", "description": "Currently pinned upstream release tag", "required": true},
+                {"key": "token", "type": "string", "description": "Optional GitHub token for private repositories or higher rate limits", "sensitive": true}
+            ],
+            "outputs": [
+                {"key": "upstream_owner", "type": "string", "description": "Upstream repository owner"},
+                {"key": "upstream_repo", "type": "string", "description": "Upstream repository name"},
+                {"key": "pinned_tag", "type": "string", "description": "Configured pinned tag"},
+                {"key": "latest_tag", "type": "string", "description": "Latest release tag returned by GitHub"},
+                {"key": "update_available", "type": "boolean", "description": "Whether latest_tag differs from pinned_tag"},
+                {"key": "release_id", "type": "number", "description": "Latest release ID"},
+                {"key": "release_url", "type": "string", "description": "Latest release HTML URL"},
+                {"key": "published_at", "type": "string", "description": "Latest release publish timestamp in RFC3339 format"}
             ]
         },
         {

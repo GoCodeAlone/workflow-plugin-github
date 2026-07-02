@@ -1,0 +1,54 @@
+# Example Workflow app that checks an upstream GitHub release and dispatches a
+# repo-owned update workflow only when the pinned tag is stale.
+
+version: 1
+
+requires:
+  plugins:
+    - name: pipeline-steps
+    - name: workflow-plugin-github
+
+workflows:
+  upstream-release-monitor:
+    trigger:
+      type: http
+      config:
+        path: /upstream-release-monitor
+        method: POST
+    steps:
+      - name: check_upstream
+        type: step.gh_upstream_release_monitor
+        config:
+          upstream_owner: "{{ .body.upstream_owner }}"
+          upstream_repo: "{{ .body.upstream_repo }}"
+          pinned_tag: "{{ .body.pinned_tag }}"
+          token: "${GITHUB_TOKEN}"
+
+      - name: route_update
+        type: step.conditional
+        config:
+          field: steps.check_upstream.update_available
+          routes:
+            "false": no_update
+          default: dispatch_update
+
+      - name: no_update
+        type: step.set
+        config:
+          values:
+            status: current
+            latest_tag: "{{ .steps.check_upstream.latest_tag }}"
+
+      - name: dispatch_update
+        type: step.gh_action_trigger
+        config:
+          owner: "{{ .body.target_owner }}"
+          repo: "{{ .body.target_repo }}"
+          workflow: "{{ .body.update_workflow }}"
+          ref: "{{ .body.target_ref }}"
+          inputs:
+            upstream_owner: "{{ .body.upstream_owner }}"
+            upstream_repo: "{{ .body.upstream_repo }}"
+            pinned_tag: "{{ .body.pinned_tag }}"
+            latest_tag: "{{ .steps.check_upstream.latest_tag }}"
+          token: "${GITHUB_TOKEN}"
