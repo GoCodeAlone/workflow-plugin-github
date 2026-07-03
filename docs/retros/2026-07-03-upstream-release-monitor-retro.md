@@ -36,7 +36,7 @@ The activation log was unavailable at `.claude/autodev-state/in-progress.jsonl` 
 | writing-plans | yes | Locked plan exists. |
 | adversarial-design-review (plan) | unverified | No committed report. |
 | alignment-check | yes | Scope manifest check passed before lock. |
-| scope-lock | yes | Lock sidecar exists and was regenerated after review fix. |
+| scope-lock | yes | Lock sidecar existed during execution, was regenerated after review fix, and was removed after the plan was marked complete. |
 | subagent-driven-development | no | Main thread executed implementation directly. |
 | finishing Step 1e (doc-reconciliation) | unverified | PR touched docs/examples; no explicit `Doc-reconciliation:` line was present in the PR body. |
 | pr-monitoring | yes | CI and Copilot threads were monitored, fixed, resolved, and rechecked. |
@@ -63,4 +63,4 @@ The activation log was unavailable at `.claude/autodev-state/in-progress.jsonl` 
 
 | Guidance file | Change | Reason |
 |---|---|---|
-| `docs/design-guidance.md` | no change | No durable project-wide guidance file exists, and the lessons are gate/plugin-process follow-ups rather than GitHub-plugin design constraints. |
+| `(none)` | no change | No durable project-wide guidance file exists, and the lessons are gate/plugin-process follow-ups rather than GitHub-plugin design constraints. |
