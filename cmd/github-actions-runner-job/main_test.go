@@ -416,6 +416,128 @@ func TestT915WaitForGitHubCompletionDoesNotBlockOnRunnerShutdownAfterTerminalSuc
 	}
 }
 
+func TestT915WaitForGitHubCompletionAcceptsBlankRunnerNameAfterTerminalSuccess(t *testing.T) {
+	oldPoll := githubJobPollInterval
+	githubJobPollInterval = 10 * time.Millisecond
+	oldShutdownGrace := githubRunnerShutdownGrace
+	githubRunnerShutdownGrace = 10 * time.Millisecond
+	t.Cleanup(func() {
+		githubJobPollInterval = oldPoll
+		githubRunnerShutdownGrace = oldShutdownGrace
+	})
+
+	var canceled bool
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/runs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":28788166953,"status":"completed","conclusion":"success"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/actions/runs/28788166953/jobs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jobs":[{"id":85359800000,"run_id":28788166953,"status":"completed","conclusion":"skipped","runner_name":""},{"id":85359812345,"run_id":28788166953,"status":"completed","conclusion":"success","runner_name":""}]}`))
+		default:
+			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+
+	driver := &runnerDriver{
+		req: internal.EphemeralRunnerJobRequest{
+			Repository: "GoCodeAlone/workflow-compute",
+			Workflow:   "dogfood.yml",
+		},
+		sidecar: &providerSidecarClient{
+			baseURL: sidecar.URL,
+			token:   "provider-token",
+			http:    sidecar.Client(),
+		},
+	}
+	runner := &runningCommand{
+		path: "run.sh",
+		cancel: func() {
+			canceled = true
+		},
+		result: make(chan runnerCompletion, 1),
+		done:   make(chan error),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		completion, err := driver.waitForGitHubCompletion(ctx, runner, "wfc-stg-ghp-linux-260629fabb6f-12640z85f6ed", time.Now().UTC().Add(-time.Minute))
+		if err != nil {
+			done <- err
+			return
+		}
+		if !completion.Success || !completion.Terminal || completion.WorkflowRunID != 28788166953 || completion.WorkflowJobID != 85359812345 {
+			done <- fmt.Errorf("completion = %+v", completion)
+			return
+		}
+		if !strings.Contains(completion.Message, "runner=unreported") {
+			done <- fmt.Errorf("completion message did not record blank-runner fallback: %s", completion.Message)
+			return
+		}
+		done <- nil
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("waitForGitHubCompletion blocked when GitHub job API omitted runner_name")
+	}
+	if !canceled {
+		t.Fatal("runner was not asked to stop")
+	}
+}
+
+func TestT915ObserveGitHubJobDoesNotUseBlankRunnerFallbackAcrossMultipleRuns(t *testing.T) {
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/runs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":28788166953,"status":"completed","conclusion":"success"},{"id":28788166954,"status":"completed","conclusion":"success"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/actions/runs/28788166953/jobs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jobs":[{"id":85359812345,"run_id":28788166953,"status":"completed","conclusion":"success","runner_name":""}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/actions/runs/28788166954/jobs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"jobs":[{"id":85359812346,"run_id":28788166954,"status":"completed","conclusion":"success","runner_name":""}]}`))
+		default:
+			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+
+	driver := &runnerDriver{
+		req: internal.EphemeralRunnerJobRequest{
+			Repository: "GoCodeAlone/workflow-compute",
+			Workflow:   "dogfood.yml",
+		},
+		sidecar: &providerSidecarClient{
+			baseURL: sidecar.URL,
+			token:   "provider-token",
+			http:    sidecar.Client(),
+		},
+	}
+	completion, err := driver.observeGitHubJob(context.Background(), "wfc-stg-ghp-linux-260629fabb6f-12640z85f6ed", time.Now().UTC().Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("observe GitHub job: %v", err)
+	}
+	if completion.WorkflowRunID != 0 {
+		t.Fatalf("blank runner fallback must fail closed across multiple runs, got %+v", completion)
+	}
+}
+
 func TestT915WaitForGitHubCompletionDoesNotBlockOnRunnerShutdownAfterTimeout(t *testing.T) {
 	oldPoll := githubJobPollInterval
 	githubJobPollInterval = time.Hour
