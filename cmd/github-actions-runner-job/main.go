@@ -492,6 +492,8 @@ func (d *runnerDriver) observeGitHubJob(ctx context.Context, runnerName string, 
 		return githubJobCompletion{}, err
 	}
 	var unassigned githubJobCompletion
+	var terminalUnreported githubJobCompletion
+	allowTerminalUnreported := len(runs) == 1
 	for _, run := range runs {
 		jobs, err := d.sidecar.workflowRunJobs(ctx, d.req.Repository, run.ID)
 		if err != nil {
@@ -499,6 +501,8 @@ func (d *runnerDriver) observeGitHubJob(ctx context.Context, runnerName string, 
 		}
 		for _, job := range jobs {
 			jobRunner := strings.TrimSpace(job.RunnerName)
+			runTerminal := strings.EqualFold(run.Status, "completed")
+			jobTerminal := strings.EqualFold(job.Status, "completed")
 			if jobRunner == "" && unassigned.WorkflowRunID == 0 && d.jobLabelsMatchRunner(job.Labels, runnerName) && !strings.EqualFold(job.Status, "completed") && !strings.EqualFold(run.Status, "completed") {
 				unassigned = githubJobCompletion{
 					WorkflowRunID:     run.ID,
@@ -506,6 +510,26 @@ func (d *runnerDriver) observeGitHubJob(ctx context.Context, runnerName string, 
 					WorkflowJobStatus: job.Status,
 					Message:           fmt.Sprintf("run=%d job=%d status=%s conclusion=%s runner=unassigned", run.ID, job.ID, job.Status, job.Conclusion),
 				}
+				continue
+			}
+			if allowTerminalUnreported && jobRunner == "" && terminalUnreported.WorkflowRunID == 0 && (runTerminal || jobTerminal) {
+				conclusion := strings.ToLower(strings.TrimSpace(job.Conclusion))
+				if conclusion == "" {
+					conclusion = strings.ToLower(strings.TrimSpace(run.Conclusion))
+				}
+				if conclusion == "skipped" {
+					continue
+				}
+				completion := githubJobCompletion{
+					WorkflowRunID:     run.ID,
+					WorkflowJobID:     job.ID,
+					WorkflowJobStatus: job.Status,
+					Assigned:          true,
+					Terminal:          true,
+					Message:           fmt.Sprintf("run=%d job=%d status=%s conclusion=%s runner=unreported", run.ID, job.ID, job.Status, job.Conclusion),
+				}
+				completion.Success = conclusion == "success" || conclusion == "succeeded"
+				terminalUnreported = completion
 				continue
 			}
 			if jobRunner != runnerName {
@@ -529,6 +553,9 @@ func (d *runnerDriver) observeGitHubJob(ctx context.Context, runnerName string, 
 			completion.Success = conclusion == "success" || conclusion == "succeeded"
 			return completion, nil
 		}
+	}
+	if terminalUnreported.WorkflowRunID != 0 {
+		return terminalUnreported, nil
 	}
 	return unassigned, nil
 }
