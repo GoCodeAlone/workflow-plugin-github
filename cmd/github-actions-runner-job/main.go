@@ -181,6 +181,22 @@ func (c *providerSidecarClient) orgRegistrationToken(ctx context.Context, organi
 	return out, nil
 }
 
+func (c *providerSidecarClient) preflightOrg(ctx context.Context, organization, runnerGroup string, labels []string) (internal.GitHubRunnerProviderPreflight, error) {
+	var out internal.GitHubRunnerProviderPreflight
+	path := "/v1/actions/orgs/" + url.PathEscape(organization) + "/runners/preflight"
+	body := struct {
+		RunnerGroup string   `json:"runner_group,omitempty"`
+		Labels      []string `json:"labels"`
+	}{
+		RunnerGroup: runnerGroup,
+		Labels:      append([]string(nil), labels...),
+	}
+	if err := c.do(ctx, http.MethodPost, path, body, http.StatusOK, &out); err != nil {
+		return internal.GitHubRunnerProviderPreflight{}, err
+	}
+	return out, nil
+}
+
 func (c *providerSidecarClient) dispatchWorkflow(ctx context.Context, repository, workflow, ref string, inputs map[string]string) error {
 	owner, repo, err := splitRepository(repository)
 	if err != nil {
@@ -308,14 +324,33 @@ func (d *runnerDriver) RunGitHubJob(ctx context.Context, mode internal.Ephemeral
 		}
 		dispatchInputs = inputs
 	}
-	if err := d.configureRunner(ctx, spec, token.Token); err != nil {
-		return internal.EphemeralRunnerJobResult{}, err
-	}
 	result := internal.EphemeralRunnerJobResult{
-		RunnerID:   d.runnerID(),
 		RunnerName: spec.RunnerName,
 		Labels:     append([]string(nil), spec.Labels...),
 	}
+	if d.req.RequirePreflight {
+		observed, err := d.sidecar.preflightOrg(ctx, d.req.Organization, spec.RunnerGroup, spec.Labels)
+		if err != nil {
+			return result, fmt.Errorf("preflight organization runner capacity: %w", err)
+		}
+		result.Preflight = &observed
+		if observed.Organization != d.req.Organization || observed.RunnerGroup != spec.RunnerGroup {
+			return result, fmt.Errorf(
+				"preflight response did not match organization runner request: expected organization=%q runner_group=%q, observed organization=%q runner_group=%q",
+				d.req.Organization,
+				spec.RunnerGroup,
+				observed.Organization,
+				observed.RunnerGroup,
+			)
+		}
+		if !observed.ActionsEnabled || !observed.SelfHostedAllowed {
+			return result, fmt.Errorf("preflight rejected organization runner capacity: actions_enabled=%t self_hosted_allowed=%t", observed.ActionsEnabled, observed.SelfHostedAllowed)
+		}
+	}
+	if err := d.configureRunner(ctx, spec, token.Token); err != nil {
+		return result, err
+	}
+	result.RunnerID = d.runnerID()
 	if mode == internal.EphemeralRunnerJobModeDispatchThenWait {
 		runner, err := d.startRunner(ctx)
 		if err != nil {

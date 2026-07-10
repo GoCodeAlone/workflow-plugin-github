@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,13 +18,27 @@ import (
 )
 
 func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testing.T) {
-	var tokenCalls, dispatchCalls, deleteCalls int
+	var preflightCalls, tokenCalls, dispatchCalls, deleteCalls int
 	workspace := t.TempDir()
 	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer provider-token" {
 			t.Fatalf("authorization = %q", got)
 		}
 		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/preflight":
+			preflightCalls++
+			var body struct {
+				RunnerGroup string   `json:"runner_group"`
+				Labels      []string `json:"labels"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode preflight body: %v", err)
+			}
+			if body.RunnerGroup != "ephemeral" || !slices.Contains(body.Labels, "wfc-ghp-ephemeral") {
+				t.Fatalf("preflight body = %+v", body)
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"organization":"GoCodeAlone","runner_group":"ephemeral","runner_count_checked":4,"actions_enabled":true,"self_hosted_allowed":true}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/registration-token":
 			tokenCalls++
 			w.WriteHeader(http.StatusCreated)
@@ -114,6 +129,7 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 	    "workflow":"dogfood.yml",
 	    "ref":"main",
 	    "runner_group":"ephemeral",
+	    "require_preflight":true,
 	    "workflow_inputs":{"Custom":"kept","Runner_Profile":"manual","ALLOW_GITHUB_HOSTED_FALLBACK":"true"}
 	  }
 	}`)
@@ -121,8 +137,8 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 	if err := runWithIO([]string{}, input, &stdout, &stderr); err != nil {
 		t.Fatalf("run dynamic provider: %v\nstderr:\n%s", err, stderr.String())
 	}
-	if tokenCalls != 1 || dispatchCalls != 1 || deleteCalls != 1 {
-		t.Fatalf("sidecar calls: token=%d dispatch=%d delete=%d", tokenCalls, dispatchCalls, deleteCalls)
+	if preflightCalls != 1 || tokenCalls != 1 || dispatchCalls != 1 || deleteCalls != 1 {
+		t.Fatalf("sidecar calls: preflight=%d token=%d dispatch=%d delete=%d", preflightCalls, tokenCalls, dispatchCalls, deleteCalls)
 	}
 	configArgs := readFile(t, filepath.Join(workspace, "config.args"))
 	for _, want := range []string{
@@ -153,10 +169,97 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 		t.Fatalf("artifacts = %#v", result.Artifacts)
 	}
 	proof := readFile(t, filepath.Join(workspace, "github-runner-proof.json"))
-	for _, want := range []string{"wfc-stg-ghp-linux-abcdef987249-543210f71ee4", "task-abcdef9876543210", "28449657934", "84308154551", "completed", "removed"} {
+	for _, want := range []string{"wfc-stg-ghp-linux-abcdef987249-543210f71ee4", "task-abcdef9876543210", "28449657934", "84308154551", "completed", "removed", `"runner_count_checked": 4`, `"actions_enabled": true`, `"self_hosted_allowed": true`} {
 		if !strings.Contains(proof, want) {
 			t.Fatalf("proof missing %q:\n%s", want, proof)
 		}
+	}
+}
+
+func TestV918CommandPreservesRejectedPreflightWithoutConfiguringRunner(t *testing.T) {
+	workspace := t.TempDir()
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/registration-token":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"token":"runner-registration-token","expires_at":"2026-06-26T22:00:00Z"}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/actions/orgs/GoCodeAlone/runners/preflight":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"organization":"GoCodeAlone","runner_group":"default","runner_count_checked":4,"actions_enabled":true,"self_hosted_allowed":true}`))
+		default:
+			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+
+	runnerDir := t.TempDir()
+	writeExecutable(t, filepath.Join(runnerDir, "config.sh"), "#!/bin/sh\ntouch configured\n")
+	if err := os.WriteFile(filepath.Join(runnerDir, ".runner"), []byte(`{"agentId":42}`), 0o600); err != nil {
+		t.Fatalf("write stale runner metadata: %v", err)
+	}
+	t.Chdir(workspace)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", sidecar.URL)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "provider-token")
+	t.Setenv("GITHUB_ACTIONS_RUNNER_DIR", runnerDir)
+
+	input := strings.NewReader(`{
+	  "protocol_version":"compute.v1alpha1",
+	  "task_id":"task-abcdef9876543210",
+	  "lease_id":"lease-1",
+	  "provider_config":{"plugin_id":"workflow-plugin-github","provider_id":"github-actions-runner"},
+	  "operation":"ephemeral_runner_job",
+	  "input":{
+	    "mode":"dispatch_then_wait",
+	    "environment":"stg",
+	    "os":"linux",
+	    "worker_id":"worker-0123456789abcdef",
+	    "task_id":"task-abcdef9876543210",
+	    "organization":"GoCodeAlone",
+	    "repository":"GoCodeAlone/workflow-compute",
+	    "workflow":"dogfood.yml",
+	    "ref":"main",
+	    "runner_group":"ephemeral",
+	    "require_preflight":true
+	  }
+	}`)
+	var stdout, stderr bytes.Buffer
+	err := runWithIO([]string{}, input, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "preflight response did not match organization runner request") {
+		t.Fatalf("run error = %v, want mismatched preflight rejection", err)
+	}
+	for _, want := range []string{`expected organization="GoCodeAlone"`, `runner_group="ephemeral"`, `observed organization="GoCodeAlone"`, `runner_group="default"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("preflight mismatch error omitted %q: %v", want, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(runnerDir, "configured")); !os.IsNotExist(err) {
+		t.Fatalf("runner was configured after rejected preflight: %v", err)
+	}
+	proof := readFile(t, filepath.Join(workspace, "github-runner-proof.json"))
+	for _, want := range []string{`"runner_group": "default"`, `"runner_count_checked": 4`, `"actions_enabled": true`, `"self_hosted_allowed": true`} {
+		if !strings.Contains(proof, want) {
+			t.Fatalf("proof missing rejected preflight %q:\n%s", want, proof)
+		}
+	}
+}
+
+func TestV918PreflightOmitsEmptyRunnerGroup(t *testing.T) {
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode preflight body: %v", err)
+		}
+		if _, ok := body["runner_group"]; ok {
+			t.Fatalf("blank runner_group must be omitted: %s", body["runner_group"])
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"organization":"GoCodeAlone","actions_enabled":true,"self_hosted_allowed":true}`))
+	}))
+	t.Cleanup(sidecar.Close)
+
+	client := &providerSidecarClient{baseURL: sidecar.URL, token: "provider-token", http: sidecar.Client()}
+	if _, err := client.preflightOrg(t.Context(), "GoCodeAlone", "", []string{"self-hosted"}); err != nil {
+		t.Fatalf("preflight: %v", err)
 	}
 }
 
