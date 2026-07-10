@@ -185,7 +185,7 @@ func (c *providerSidecarClient) preflightOrg(ctx context.Context, organization, 
 	var out internal.GitHubRunnerProviderPreflight
 	path := "/v1/actions/orgs/" + url.PathEscape(organization) + "/runners/preflight"
 	body := struct {
-		RunnerGroup string   `json:"runner_group"`
+		RunnerGroup string   `json:"runner_group,omitempty"`
 		Labels      []string `json:"labels"`
 	}{
 		RunnerGroup: runnerGroup,
@@ -335,7 +335,13 @@ func (d *runnerDriver) RunGitHubJob(ctx context.Context, mode internal.Ephemeral
 		}
 		result.Preflight = &observed
 		if observed.Organization != d.req.Organization || observed.RunnerGroup != spec.RunnerGroup {
-			return result, fmt.Errorf("preflight response did not match organization runner request")
+			return result, fmt.Errorf(
+				"preflight response did not match organization runner request: expected organization=%q runner_group=%q, observed organization=%q runner_group=%q",
+				d.req.Organization,
+				spec.RunnerGroup,
+				observed.Organization,
+				observed.RunnerGroup,
+			)
 		}
 		if !observed.ActionsEnabled || !observed.SelfHostedAllowed {
 			return result, fmt.Errorf("preflight rejected organization runner capacity: actions_enabled=%t self_hosted_allowed=%t", observed.ActionsEnabled, observed.SelfHostedAllowed)

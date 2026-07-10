@@ -227,6 +227,11 @@ func TestV918CommandPreservesRejectedPreflightWithoutConfiguringRunner(t *testin
 	if err == nil || !strings.Contains(err.Error(), "preflight response did not match organization runner request") {
 		t.Fatalf("run error = %v, want mismatched preflight rejection", err)
 	}
+	for _, want := range []string{`expected organization="GoCodeAlone"`, `runner_group="ephemeral"`, `observed organization="GoCodeAlone"`, `runner_group="default"`} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("preflight mismatch error omitted %q: %v", want, err)
+		}
+	}
 	if _, err := os.Stat(filepath.Join(runnerDir, "configured")); !os.IsNotExist(err) {
 		t.Fatalf("runner was configured after rejected preflight: %v", err)
 	}
@@ -235,6 +240,26 @@ func TestV918CommandPreservesRejectedPreflightWithoutConfiguringRunner(t *testin
 		if !strings.Contains(proof, want) {
 			t.Fatalf("proof missing rejected preflight %q:\n%s", want, proof)
 		}
+	}
+}
+
+func TestV918PreflightOmitsEmptyRunnerGroup(t *testing.T) {
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]json.RawMessage
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode preflight body: %v", err)
+		}
+		if _, ok := body["runner_group"]; ok {
+			t.Fatalf("blank runner_group must be omitted: %s", body["runner_group"])
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"organization":"GoCodeAlone","actions_enabled":true,"self_hosted_allowed":true}`))
+	}))
+	t.Cleanup(sidecar.Close)
+
+	client := &providerSidecarClient{baseURL: sidecar.URL, token: "provider-token", http: sidecar.Client()}
+	if _, err := client.preflightOrg(t.Context(), "GoCodeAlone", "", []string{"self-hosted"}); err != nil {
+		t.Fatalf("preflight: %v", err)
 	}
 }
 
