@@ -331,6 +331,9 @@ func (d *runnerDriver) RunGitHubJob(ctx context.Context, mode internal.Ephemeral
 		if completion.WorkflowRunID != 0 {
 			result.WorkflowRunID = completion.WorkflowRunID
 		}
+		if completion.RunnerID != 0 {
+			result.RunnerID = completion.RunnerID
+		}
 		if completion.WorkflowJobID != 0 {
 			result.WorkflowJobID = completion.WorkflowJobID
 		}
@@ -370,6 +373,7 @@ func (d *runnerDriver) workflowDispatchInputs(spec internal.EphemeralRunnerJobSp
 }
 
 type githubJobCompletion struct {
+	RunnerID          int64
 	WorkflowRunID     int64
 	WorkflowJobID     int64
 	WorkflowJobStatus string
@@ -411,13 +415,20 @@ func (d *runnerDriver) waitForGitHubCompletion(ctx context.Context, runner *runn
 			runner.cancel()
 			err, _ := runner.waitAfterCancel(githubRunnerShutdownGrace)
 			if result.success {
-				if completion, observeErr := d.observeGitHubJob(ctx, runnerName, dispatchedAfter); observeErr == nil && completion.WorkflowRunID != 0 {
-					if completion.Terminal && !completion.Success {
-						return completion, fmt.Errorf("github workflow job failed after success marker: %s", completion.Message)
-					}
-					return completion, nil
+				completion, observeErr := d.observeTerminalGitHubJob(ctx, runnerName, dispatchedAfter, githubJobExitGracePolls)
+				if observeErr != nil {
+					return last, fmt.Errorf("observe GitHub workflow job after success marker: %w", observeErr)
 				}
-				return last, nil
+				if completion.WorkflowRunID == 0 || !completion.Assigned {
+					return completion, fmt.Errorf("%s reported success before GitHub workflow job was assigned", filepath.Base(runner.path))
+				}
+				if !completion.Terminal {
+					return completion, fmt.Errorf("%s reported success before GitHub workflow job completed: %s", filepath.Base(runner.path), completion.Message)
+				}
+				if !completion.Success {
+					return completion, fmt.Errorf("github workflow job failed after success marker: %s", completion.Message)
+				}
+				return completion, nil
 			}
 			if err != nil {
 				return last, fmt.Errorf("%s reported failed job and exited with %w: %s", filepath.Base(runner.path), err, result.line)
@@ -521,6 +532,7 @@ func (d *runnerDriver) observeGitHubJob(ctx context.Context, runnerName string, 
 					continue
 				}
 				completion := githubJobCompletion{
+					RunnerID:          job.RunnerID,
 					WorkflowRunID:     run.ID,
 					WorkflowJobID:     job.ID,
 					WorkflowJobStatus: job.Status,
@@ -536,6 +548,7 @@ func (d *runnerDriver) observeGitHubJob(ctx context.Context, runnerName string, 
 				continue
 			}
 			completion := githubJobCompletion{
+				RunnerID:          job.RunnerID,
 				WorkflowRunID:     run.ID,
 				WorkflowJobID:     job.ID,
 				WorkflowJobStatus: job.Status,
