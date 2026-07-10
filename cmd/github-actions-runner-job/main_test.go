@@ -81,7 +81,7 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":28449657934,"status":"completed","conclusion":"success"}]}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/actions/runs/28449657934/jobs":
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"jobs":[{"id":84308154551,"run_id":28449657934,"status":"completed","conclusion":"success","runner_name":"wfc-stg-ghp-linux-abcdef987249-543210f71ee4"}]}`))
+			_, _ = w.Write([]byte(`{"jobs":[{"id":84308154551,"run_id":28449657934,"status":"completed","conclusion":"success","runner_id":42,"runner_name":"wfc-stg-ghp-linux-abcdef987249-543210f71ee4"}]}`))
 		default:
 			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.Path)
 		}
@@ -89,7 +89,7 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 	t.Cleanup(sidecar.Close)
 
 	runnerDir := t.TempDir()
-	writeExecutable(t, filepath.Join(runnerDir, "config.sh"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/config.args\"\nprintf '{\"agentId\":42}\\n' > .runner\n")
+	writeExecutable(t, filepath.Join(runnerDir, "config.sh"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/config.args\"\n")
 	writeExecutable(t, filepath.Join(runnerDir, "run.sh"), "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.args\"\ntouch \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.started\"\nwhile [ ! -f \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/dispatch.seen\" ]; do sleep 0.1; done\n(for i in $(seq 1 50); do printf 'stdout-%s\\n' \"$i\"; done) &\n(for i in $(seq 1 50); do printf 'stderr-%s\\n' \"$i\" >&2; done) &\nwait\nprintf 'runner executed\\n' > \"$GITHUB_ACTIONS_RUNNER_JOB_TEST_DIR/run.log\"\n")
 	t.Chdir(workspace)
 	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", sidecar.URL)
@@ -160,7 +160,16 @@ func TestT915CommandRunsDynamicProviderEnvelopeThroughSidecarAndRunner(t *testin
 	}
 }
 
-func TestT915CommandTreatsRunnerSuccessMarkerAsCompletion(t *testing.T) {
+func TestV917CommandRejectsRunnerSuccessMarkerWithoutGitHubCompletion(t *testing.T) {
+	oldPoll := githubJobPollInterval
+	githubJobPollInterval = 10 * time.Millisecond
+	oldGracePolls := githubJobExitGracePolls
+	githubJobExitGracePolls = 3
+	t.Cleanup(func() {
+		githubJobPollInterval = oldPoll
+		githubJobExitGracePolls = oldGracePolls
+	})
+
 	var tokenCalls, dispatchCalls, deleteCalls int
 	workspace := t.TempDir()
 	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -230,20 +239,12 @@ func TestT915CommandTreatsRunnerSuccessMarkerAsCompletion(t *testing.T) {
 	  }
 	}`)
 	var stdout, stderr bytes.Buffer
-	if err := runWithIO([]string{}, input, &stdout, &stderr); err != nil {
-		t.Fatalf("run dynamic provider: %v\nstderr:\n%s", err, stderr.String())
+	err := runWithIO([]string{}, input, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "reported success before GitHub workflow job was assigned") {
+		t.Fatalf("run error = %v, want missing terminal GitHub completion", err)
 	}
 	if tokenCalls != 1 || dispatchCalls != 1 || deleteCalls != 1 {
 		t.Fatalf("sidecar calls: token=%d dispatch=%d delete=%d", tokenCalls, dispatchCalls, deleteCalls)
-	}
-	var result struct {
-		Artifacts []string `json:"artifacts"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		t.Fatalf("decode stdout: %v\n%s", err, stdout.String())
-	}
-	if len(result.Artifacts) != 1 || result.Artifacts[0] != "github-runner-proof.json" {
-		t.Fatalf("artifacts = %#v", result.Artifacts)
 	}
 	proof := readFile(t, filepath.Join(workspace, "github-runner-proof.json"))
 	for _, want := range []string{"wfc-stg-ghp-linux-abcdef987249-543210f71ee4", "task-abcdef9876543210", "removed"} {
@@ -535,6 +536,116 @@ func TestT915ObserveGitHubJobDoesNotUseBlankRunnerFallbackAcrossMultipleRuns(t *
 	}
 	if completion.WorkflowRunID != 0 {
 		t.Fatalf("blank runner fallback must fail closed across multiple runs, got %+v", completion)
+	}
+}
+
+func TestV917WaitForGitHubCompletionWaitsForTerminalAfterRunnerSuccessMarker(t *testing.T) {
+	oldPoll := githubJobPollInterval
+	githubJobPollInterval = 10 * time.Millisecond
+	oldGracePolls := githubJobExitGracePolls
+	githubJobExitGracePolls = 3
+	oldShutdownGrace := githubRunnerShutdownGrace
+	githubRunnerShutdownGrace = 10 * time.Millisecond
+	t.Cleanup(func() {
+		githubJobPollInterval = oldPoll
+		githubJobExitGracePolls = oldGracePolls
+		githubRunnerShutdownGrace = oldShutdownGrace
+	})
+
+	var jobsCalls int
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/runs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":29088740554,"status":"in_progress"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/actions/runs/29088740554/jobs":
+			jobsCalls++
+			w.WriteHeader(http.StatusOK)
+			if jobsCalls == 1 {
+				_, _ = w.Write([]byte(`{"jobs":[{"id":86348700852,"run_id":29088740554,"status":"in_progress","runner_id":277,"runner_name":"wfc-stg-ghp-linux-worker-task"}]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"jobs":[{"id":86348700852,"run_id":29088740554,"status":"completed","conclusion":"success","runner_id":277,"runner_name":"wfc-stg-ghp-linux-worker-task"}]}`))
+		default:
+			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+
+	driver := &runnerDriver{
+		req:     internal.EphemeralRunnerJobRequest{Repository: "GoCodeAlone/workflow-compute", Workflow: "dogfood.yml"},
+		sidecar: &providerSidecarClient{baseURL: sidecar.URL, token: "provider-token", http: sidecar.Client()},
+	}
+	runner := &runningCommand{
+		path:   "run.sh",
+		cancel: func() {},
+		result: make(chan runnerCompletion, 1),
+		done:   make(chan error, 1),
+	}
+	runner.result <- runnerCompletion{success: true, line: "Job completed with result: Succeeded"}
+	runner.done <- nil
+
+	completion, err := driver.waitForGitHubCompletion(t.Context(), runner, "wfc-stg-ghp-linux-worker-task", time.Now().UTC().Add(-time.Minute))
+	if err != nil {
+		t.Fatalf("wait for GitHub completion: %v", err)
+	}
+	if jobsCalls < 2 || completion.RunnerID != 277 || !completion.Terminal || !completion.Success || completion.WorkflowJobStatus != "completed" {
+		t.Fatalf("completion returned before terminal GitHub state: calls=%d completion=%+v", jobsCalls, completion)
+	}
+}
+
+func TestV917WaitForGitHubCompletionPreservesObservedIDsOnPostSuccessAPIError(t *testing.T) {
+	oldPoll := githubJobPollInterval
+	githubJobPollInterval = 10 * time.Millisecond
+	oldGracePolls := githubJobExitGracePolls
+	githubJobExitGracePolls = 3
+	oldShutdownGrace := githubRunnerShutdownGrace
+	githubRunnerShutdownGrace = 10 * time.Millisecond
+	t.Cleanup(func() {
+		githubJobPollInterval = oldPoll
+		githubJobExitGracePolls = oldGracePolls
+		githubRunnerShutdownGrace = oldShutdownGrace
+	})
+
+	var jobsCalls int
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/runs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":29088740554,"status":"in_progress"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/actions/runs/29088740554/jobs":
+			jobsCalls++
+			if jobsCalls == 1 {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"jobs":[{"id":86348700852,"run_id":29088740554,"status":"in_progress","runner_id":277,"runner_name":"wfc-stg-ghp-linux-worker-task"}]}`))
+				return
+			}
+			http.Error(w, "temporary observation failure", http.StatusServiceUnavailable)
+		default:
+			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+
+	driver := &runnerDriver{
+		req:     internal.EphemeralRunnerJobRequest{Repository: "GoCodeAlone/workflow-compute", Workflow: "dogfood.yml"},
+		sidecar: &providerSidecarClient{baseURL: sidecar.URL, token: "provider-token", http: sidecar.Client()},
+	}
+	runner := &runningCommand{
+		path:   "run.sh",
+		cancel: func() {},
+		result: make(chan runnerCompletion, 1),
+		done:   make(chan error, 1),
+	}
+	runner.result <- runnerCompletion{success: true, line: "Job completed with result: Succeeded"}
+	runner.done <- nil
+
+	completion, err := driver.waitForGitHubCompletion(t.Context(), runner, "wfc-stg-ghp-linux-worker-task", time.Now().UTC().Add(-time.Minute))
+	if err == nil || !strings.Contains(err.Error(), "temporary observation failure") {
+		t.Fatalf("wait error = %v, want post-success observation failure", err)
+	}
+	if completion.WorkflowRunID != 29088740554 || completion.WorkflowJobID != 86348700852 || completion.RunnerID != 277 {
+		t.Fatalf("completion lost observed identifiers: %+v", completion)
 	}
 }
 
