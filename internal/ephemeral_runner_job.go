@@ -33,6 +33,7 @@ type EphemeralRunnerJobRequest struct {
 	Ref                 string                 `json:"ref,omitempty"`
 	WorkflowInputs      map[string]string      `json:"workflow_inputs,omitempty"`
 	RunnerGroup         string                 `json:"runner_group,omitempty"`
+	RequirePreflight    bool                   `json:"require_preflight,omitempty"`
 	TimeoutSeconds      int                    `json:"timeout_seconds,omitempty"`
 	Timeout             time.Duration          `json:"-"`
 	RequiredRuntimeCaps []string               `json:"required_runtime_caps,omitempty"`
@@ -46,17 +47,18 @@ type EphemeralRunnerJobSpec struct {
 }
 
 type EphemeralRunnerJobResult struct {
-	RunnerID          int64    `json:"runner_id"`
-	RunnerName        string   `json:"runner_name"`
-	Labels            []string `json:"labels"`
-	WorkflowRunID     int64    `json:"workflow_run_id"`
-	WorkflowJobID     int64    `json:"workflow_job_id"`
-	WorkflowJobStatus string   `json:"workflow_job_status,omitempty"`
-	WorkerID          string   `json:"worker_id"`
-	TaskID            string   `json:"task_id"`
-	ArtifactRefs      []string `json:"artifact_refs"`
-	CleanupStatus     string   `json:"cleanup_status"`
-	RedactedError     string   `json:"redacted_error,omitempty"`
+	RunnerID          int64                          `json:"runner_id"`
+	RunnerName        string                         `json:"runner_name"`
+	Labels            []string                       `json:"labels"`
+	WorkflowRunID     int64                          `json:"workflow_run_id"`
+	WorkflowJobID     int64                          `json:"workflow_job_id"`
+	WorkflowJobStatus string                         `json:"workflow_job_status,omitempty"`
+	WorkerID          string                         `json:"worker_id"`
+	TaskID            string                         `json:"task_id"`
+	ArtifactRefs      []string                       `json:"artifact_refs"`
+	CleanupStatus     string                         `json:"cleanup_status"`
+	Preflight         *GitHubRunnerProviderPreflight `json:"preflight,omitempty"`
+	RedactedError     string                         `json:"redacted_error,omitempty"`
 }
 
 type EphemeralRunnerJobDriver interface {
