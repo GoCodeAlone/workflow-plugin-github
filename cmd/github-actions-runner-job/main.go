@@ -396,7 +396,7 @@ func (d *runnerDriver) waitForGitHubCompletion(ctx context.Context, runner *runn
 			}
 			completion, observeErr := d.observeTerminalGitHubJob(ctx, runnerName, dispatchedAfter, githubJobExitGracePolls)
 			if observeErr != nil {
-				return last, fmt.Errorf("observe GitHub workflow job after runner exit: %w", observeErr)
+				return completion, fmt.Errorf("observe GitHub workflow job after runner exit: %w", observeErr)
 			}
 			if completion.WorkflowRunID != 0 {
 				if !completion.Assigned {
@@ -417,7 +417,7 @@ func (d *runnerDriver) waitForGitHubCompletion(ctx context.Context, runner *runn
 			if result.success {
 				completion, observeErr := d.observeTerminalGitHubJob(ctx, runnerName, dispatchedAfter, githubJobExitGracePolls)
 				if observeErr != nil {
-					return last, fmt.Errorf("observe GitHub workflow job after success marker: %w", observeErr)
+					return completion, fmt.Errorf("observe GitHub workflow job after success marker: %w", observeErr)
 				}
 				if completion.WorkflowRunID == 0 || !completion.Assigned {
 					return completion, fmt.Errorf("%s reported success before GitHub workflow job was assigned", filepath.Base(runner.path))

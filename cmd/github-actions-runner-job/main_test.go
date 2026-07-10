@@ -594,6 +594,61 @@ func TestV917WaitForGitHubCompletionWaitsForTerminalAfterRunnerSuccessMarker(t *
 	}
 }
 
+func TestV917WaitForGitHubCompletionPreservesObservedIDsOnPostSuccessAPIError(t *testing.T) {
+	oldPoll := githubJobPollInterval
+	githubJobPollInterval = 10 * time.Millisecond
+	oldGracePolls := githubJobExitGracePolls
+	githubJobExitGracePolls = 3
+	oldShutdownGrace := githubRunnerShutdownGrace
+	githubRunnerShutdownGrace = 10 * time.Millisecond
+	t.Cleanup(func() {
+		githubJobPollInterval = oldPoll
+		githubJobExitGracePolls = oldGracePolls
+		githubRunnerShutdownGrace = oldShutdownGrace
+	})
+
+	var jobsCalls int
+	sidecar := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/workflows/dogfood.yml/runs":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"workflow_runs":[{"id":29088740554,"status":"in_progress"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/actions/repos/GoCodeAlone/workflow-compute/actions/runs/29088740554/jobs":
+			jobsCalls++
+			if jobsCalls == 1 {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"jobs":[{"id":86348700852,"run_id":29088740554,"status":"in_progress","runner_id":277,"runner_name":"wfc-stg-ghp-linux-worker-task"}]}`))
+				return
+			}
+			http.Error(w, "temporary observation failure", http.StatusServiceUnavailable)
+		default:
+			t.Fatalf("unexpected sidecar request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	t.Cleanup(sidecar.Close)
+
+	driver := &runnerDriver{
+		req:     internal.EphemeralRunnerJobRequest{Repository: "GoCodeAlone/workflow-compute", Workflow: "dogfood.yml"},
+		sidecar: &providerSidecarClient{baseURL: sidecar.URL, token: "provider-token", http: sidecar.Client()},
+	}
+	runner := &runningCommand{
+		path:   "run.sh",
+		cancel: func() {},
+		result: make(chan runnerCompletion, 1),
+		done:   make(chan error, 1),
+	}
+	runner.result <- runnerCompletion{success: true, line: "Job completed with result: Succeeded"}
+	runner.done <- nil
+
+	completion, err := driver.waitForGitHubCompletion(t.Context(), runner, "wfc-stg-ghp-linux-worker-task", time.Now().UTC().Add(-time.Minute))
+	if err == nil || !strings.Contains(err.Error(), "temporary observation failure") {
+		t.Fatalf("wait error = %v, want post-success observation failure", err)
+	}
+	if completion.WorkflowRunID != 29088740554 || completion.WorkflowJobID != 86348700852 || completion.RunnerID != 277 {
+		t.Fatalf("completion lost observed identifiers: %+v", completion)
+	}
+}
+
 func TestT915WaitForGitHubCompletionDoesNotBlockOnRunnerShutdownAfterTimeout(t *testing.T) {
 	oldPoll := githubJobPollInterval
 	githubJobPollInterval = time.Hour
