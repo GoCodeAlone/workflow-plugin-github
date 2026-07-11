@@ -4,9 +4,12 @@ go 1.26.4
 
 require (
 	github.com/GoCodeAlone/workflow v0.64.0
+	github.com/GoCodeAlone/workflow-plugin-compute-core v0.8.3
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-github/v69 v69.2.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	golang.org/x/crypto v0.51.0
+	golang.org/x/sys v0.44.0
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 )
 
@@ -145,7 +148,6 @@ require (
 	github.com/reugn/go-quartz v0.15.2 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/ryanuber/go-glob v1.0.0 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	github.com/sean-/seed v0.0.0-20170313163322-e2103e2c3529 // indirect
 	github.com/tidwall/btree v1.8.1 // indirect
 	github.com/tidwall/match v1.2.0 // indirect
@@ -181,7 +183,6 @@ require (
 	golang.org/x/net v0.54.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	golang.org/x/tools v0.45.0 // indirect

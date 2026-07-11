@@ -1,0 +1,23 @@
+{
+  "version": "1",
+  "contracts": [
+    {
+      "id": "github.runner_provider.v1",
+      "path": "contracts/github-runner-provider.json",
+      "schemas": [
+        {
+          "ref": "schema://providers/workflow-plugin-github/github-runner/v1",
+          "path": "schemas/github-runner-provider.schema.json"
+        },
+        {
+          "ref": "schema://providers/workflow-plugin-github/github-runner/operations/ephemeral_runner_job/input/v1",
+          "path": "schemas/github-runner-ephemeral-job-input.schema.json"
+        },
+        {
+          "ref": "schema://providers/workflow-plugin-github/github-runner/operations/ephemeral_runner_job/output/v1",
+          "path": "schemas/github-runner-ephemeral-job-output.schema.json"
+        }
+      ]
+    }
+  ]
+}

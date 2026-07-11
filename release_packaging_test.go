@@ -50,6 +50,115 @@ func TestReleaseArchiveIncludesGitHubActionsRunnerJob(t *testing.T) {
 	if _, err := os.Stat("cmd/github-actions-runner-job/main.go"); err != nil {
 		t.Fatalf("github-actions-runner-job command must exist: %v", err)
 	}
+	build := listItemWithID(topLevelSection(string(data), "builds:"), "github-actions-runner-job")
+	if !strings.Contains(build, "goos:\n      - linux") || strings.Contains(build, "      - darwin") || strings.Contains(build, "      - windows") {
+		t.Fatalf("github-actions-runner-job release targets must be Linux-only:\n%s", build)
+	}
+	archive := listItemWithID(topLevelSection(string(data), "archives:"), "workflow-plugin-github")
+	if !strings.Contains(archive, "allow_different_binary_count: true") {
+		t.Fatal("release archive must explicitly allow the Linux-only runner job to be absent from other platform archives")
+	}
+}
+
+func TestReleaseArchiveIncludesProviderContractsAndSchemas(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	archive := listItemWithID(topLevelSection(string(data), "archives:"), "workflow-plugin-github")
+	for _, want := range []string{
+		"provider.contracts.json",
+		"schemas/github-runner-provider.schema.json",
+		"schemas/github-runner-ephemeral-job-input.schema.json",
+		"schemas/github-runner-ephemeral-job-output.schema.json",
+	} {
+		if !strings.Contains(archive, "- "+want) {
+			t.Fatalf("release archive must include %q so consumers receive provider contract metadata", want)
+		}
+	}
+	if !strings.Contains(archive, "GORELEASER_RENDER_DIR }}/contracts/github-runner-provider.json") || !strings.Contains(archive, "dst: contracts/github-runner-provider.json") {
+		t.Fatal("release archive must map the rendered provider contract to its canonical archive path")
+	}
+}
+
+func TestReleaseRendersProviderContractVersion(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	config := string(data)
+	if !strings.Contains(config, "contracts/github-runner-provider.json") || !strings.Contains(config, `v{{ .Version }}`) {
+		t.Fatal("release hooks must render the provider contract version from the release tag")
+	}
+}
+
+func TestReleaseVersionRenderingDoesNotMutateTrackedManifests(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	config := string(data)
+	for _, forbidden := range []string{"/' plugin.json", "/' contracts/github-runner-provider.json"} {
+		if strings.Contains(config, forbidden) {
+			t.Fatalf("release hooks mutate tracked source manifest via %q", forbidden)
+		}
+	}
+	for _, want := range []string{"GORELEASER_RENDER_DIR"} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("hermetic release rendering missing %q", want)
+		}
+	}
+	workflowData, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatalf("read release workflow: %v", err)
+	}
+	workflow := string(workflowData)
+	for _, want := range []string{"GORELEASER_RENDER_DIR", ".goreleaser-rendered-${{ github.run_id }}-${{ github.run_attempt }}", "if: always()"} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("release workflow must clean hermetic render staging and is missing %q", want)
+		}
+	}
+	ignoreData, err := os.ReadFile(".gitignore")
+	if err != nil {
+		t.Fatalf("read .gitignore: %v", err)
+	}
+	if !strings.Contains(string(ignoreData), ".goreleaser-rendered-*") {
+		t.Fatal("unique repo-relative release render directories must remain ignored while GoReleaser assembles archives")
+	}
+}
+
+func TestReleaseDependencyCheckDoesNotMutateTrackedModules(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	hooks := topLevelSection(string(data), "before:")
+	if !strings.Contains(hooks, "go mod tidy -diff") {
+		t.Fatal("release hooks must check module tidiness without rewriting go.mod or go.sum")
+	}
+	if strings.Contains(hooks, "- go mod tidy\n") {
+		t.Fatal("release hooks must not mutate tracked module files")
+	}
+}
+
+func TestReleaseValidatesRenderedArchiveInsteadOfUnversionedSource(t *testing.T) {
+	data, err := os.ReadFile(".github/workflows/release.yml")
+	if err != nil {
+		t.Fatalf("read release workflow: %v", err)
+	}
+	workflow := string(data)
+	for _, want := range []string{
+		"workflow-plugin-github-linux-amd64.tar.gz",
+		`tar -xzf "${archive}" -C "${release_dir}"`,
+		`--release-dir "${release_dir}"`,
+	} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("post-build contract verification must inspect the rendered archive and is missing %q", want)
+		}
+	}
+	if strings.Contains(workflow, "--release-dir . .") {
+		t.Fatal("post-build contract verification must not fall back to unversioned source manifests")
+	}
 }
 
 func TestReleasePublishesGitHubActionsRunnerJobImage(t *testing.T) {

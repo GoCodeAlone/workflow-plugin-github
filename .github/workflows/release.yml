@@ -46,6 +46,12 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOPRIVATE: github.com/GoCodeAlone/*
           GONOSUMCHECK: github.com/GoCodeAlone/*
+          GORELEASER_RENDER_DIR: .goreleaser-rendered-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Clean rendered release manifests
+        if: always()
+        env:
+          GORELEASER_RENDER_DIR: .goreleaser-rendered-${{ github.run_id }}-${{ github.run_attempt }}
+        run: rm -rf "${GORELEASER_RENDER_DIR}"
       # workflow#765: runtime truth-check via plugin verify-capabilities.
       - name: Verify capabilities (runtime truth-check)
         run: |
@@ -61,11 +67,14 @@ jobs:
           wfctl plugin verify-capabilities --binary "$BIN" .
       - name: Verify shipped plugin.json carries tag (post-build)
         run: |
-          if [ -f .release/plugin.json ]; then
-            wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" --release-dir .release .
-          else
-            wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" --release-dir . .
-          fi
+          set -euo pipefail
+          archive=dist/workflow-plugin-github-linux-amd64.tar.gz
+          test -f "${archive}"
+          release_dir="${RUNNER_TEMP}/workflow-plugin-github-release-verify"
+          rm -rf "${release_dir}"
+          mkdir -p "${release_dir}"
+          tar -xzf "${archive}" -C "${release_dir}"
+          wfctl plugin validate-contract --for-publish --tag "${{ github.ref_name }}" --release-dir "${release_dir}" .
       - name: Publish release (was draft during asset upload)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

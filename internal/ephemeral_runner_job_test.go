@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -111,6 +112,7 @@ func TestT594EphemeralRunnerJobUsesExactLabelsForDispatchAndAttachModes(t *testi
 				Repository:   "GoCodeAlone/workflow-compute",
 				Workflow:     "dogfood.yml",
 				Ref:          "main",
+				RuntimeCaps:  []string{"github-actions-runner"},
 			})
 			if err != nil {
 				t.Fatalf("run job: %v", err)
@@ -122,6 +124,28 @@ func TestT594EphemeralRunnerJobUsesExactLabelsForDispatchAndAttachModes(t *testi
 				t.Fatalf("driver labels:\n got %#v\nwant %#v", driver.spec.Labels, result.Labels)
 			}
 		})
+	}
+}
+
+func TestT916EphemeralRunnerJobAlwaysRequiresRunnerExecutorCapability(t *testing.T) {
+	driver := &fakeEphemeralRunnerDriver{}
+	job := NewEphemeralRunnerJob(driver)
+	result, err := job.Run(context.Background(), EphemeralRunnerJobRequest{
+		Mode:         EphemeralRunnerJobModeDispatchThenWait,
+		Environment:  "stg",
+		OS:           "linux",
+		WorkerID:     "worker-1",
+		TaskID:       "task-1",
+		Organization: "GoCodeAlone",
+	})
+	if !errors.Is(err, ErrEphemeralRunnerCapabilityUnsupported) || !strings.Contains(err.Error(), "github-actions-runner") {
+		t.Fatalf("missing mandatory runner capability error = %v", err)
+	}
+	if driver.mode != "" {
+		t.Fatalf("driver ran without mandatory runner capability: mode=%q", driver.mode)
+	}
+	if result.RunnerName == "" || len(result.Labels) != 5 || result.WorkerID != "worker-1" || result.TaskID != "task-1" || result.CleanupStatus != "skipped" {
+		t.Fatalf("capability failure proof identity = %+v", result)
 	}
 }
 
@@ -143,6 +167,7 @@ func TestT594EphemeralRunnerJobCleansUpRunnerOnTimeout(t *testing.T) {
 		TaskID:       "task-abcdef9876543210",
 		Organization: "GoCodeAlone",
 		Timeout:      10 * time.Millisecond,
+		RuntimeCaps:  []string{"github-actions-runner"},
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error: got %v", err)
@@ -161,7 +186,7 @@ func TestT594EphemeralRunnerJobCleansUpRunnerOnTimeout(t *testing.T) {
 	}
 }
 
-func TestT594EphemeralRunnerJobProofIncludesAssignmentCleanupAndArtifacts(t *testing.T) {
+func TestT594EphemeralRunnerJobProofIncludesAssignmentAndCleanup(t *testing.T) {
 	driver := &fakeEphemeralRunnerDriver{
 		result: EphemeralRunnerJobResult{
 			RunnerID:      42,
@@ -171,7 +196,6 @@ func TestT594EphemeralRunnerJobProofIncludesAssignmentCleanupAndArtifacts(t *tes
 			WorkflowJobID: 2002,
 			WorkerID:      "worker-0123456789abcdef",
 			TaskID:        "task-abcdef9876543210",
-			ArtifactRefs:  []string{"stg://proofs/proof-123/artifacts/result.json"},
 			CleanupStatus: "removed",
 			RedactedError: "<redacted>",
 		},
@@ -184,6 +208,7 @@ func TestT594EphemeralRunnerJobProofIncludesAssignmentCleanupAndArtifacts(t *tes
 		WorkerID:     "worker-0123456789abcdef",
 		TaskID:       "task-abcdef9876543210",
 		Organization: "GoCodeAlone",
+		RuntimeCaps:  []string{"github-actions-runner"},
 	})
 	if err != nil {
 		t.Fatalf("run job: %v", err)
@@ -195,11 +220,62 @@ func TestT594EphemeralRunnerJobProofIncludesAssignmentCleanupAndArtifacts(t *tes
 	if result.WorkflowRunID == 0 || result.WorkflowJobID == 0 {
 		t.Fatalf("workflow assignment missing from proof: %+v", result)
 	}
-	if result.WorkerID == "" || result.TaskID == "" || len(result.ArtifactRefs) == 0 {
-		t.Fatalf("STG proof/artifact refs missing from proof: %+v", result)
+	if result.WorkerID == "" || result.TaskID == "" {
+		t.Fatalf("worker/task identity missing from proof: %+v", result)
 	}
 	if result.CleanupStatus != "removed" || result.RedactedError == "" {
 		t.Fatalf("cleanup/redaction missing from proof: %+v", result)
+	}
+}
+
+func TestT916EphemeralRunnerJobPreservesIdentityWhenJITAcquisitionFails(t *testing.T) {
+	driver := &fakeEphemeralRunnerDriver{runErr: errors.New("JIT config unavailable")}
+	result, err := NewEphemeralRunnerJob(driver).Run(context.Background(), EphemeralRunnerJobRequest{
+		Mode:         EphemeralRunnerJobModeDispatchThenWait,
+		Environment:  "stg",
+		OS:           "linux",
+		WorkerID:     "worker-1",
+		TaskID:       "task-1",
+		Organization: "GoCodeAlone",
+		RuntimeCaps:  []string{"github-actions-runner"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "JIT config unavailable") {
+		t.Fatalf("JIT config error = %v", err)
+	}
+	if result.RunnerName == "" || len(result.Labels) == 0 || result.WorkerID != "worker-1" || result.TaskID != "task-1" {
+		t.Fatalf("failure proof identity = %+v", result)
+	}
+	if result.CleanupStatus != "skipped" {
+		t.Fatalf("cleanup status = %q, want skipped", result.CleanupStatus)
+	}
+}
+
+func TestT916EphemeralRunnerJobPreservesRunAndCleanupFailures(t *testing.T) {
+	runErr := errors.New("runner execution failed")
+	cleanupErr := errors.New("runner cleanup failed")
+	driver := &fakeEphemeralRunnerDriver{
+		result:    EphemeralRunnerJobResult{RunnerID: 42},
+		runErr:    runErr,
+		removeErr: cleanupErr,
+	}
+	previousRetryInterval := ephemeralRunnerCleanupRetryInterval
+	ephemeralRunnerCleanupRetryInterval = time.Millisecond
+	t.Cleanup(func() { ephemeralRunnerCleanupRetryInterval = previousRetryInterval })
+
+	result, err := NewEphemeralRunnerJob(driver).Run(context.Background(), EphemeralRunnerJobRequest{
+		Mode:         EphemeralRunnerJobModeDispatchThenWait,
+		Environment:  "stg",
+		OS:           "linux",
+		WorkerID:     "worker-1",
+		TaskID:       "task-1",
+		Organization: "GoCodeAlone",
+		RuntimeCaps:  []string{"github-actions-runner"},
+	})
+	if !errors.Is(err, runErr) || !errors.Is(err, cleanupErr) {
+		t.Fatalf("combined error = %v, want run and cleanup failures", err)
+	}
+	if result.CleanupStatus != "remove_failed" {
+		t.Fatalf("cleanup status = %q", result.CleanupStatus)
 	}
 }
 
@@ -213,7 +289,7 @@ func TestT594EphemeralRunnerJobRejectsDockerOrIaCWithoutCapabilityExtras(t *test
 		TaskID:              "task-abcdef9876543210",
 		Organization:        "GoCodeAlone",
 		RequiredRuntimeCaps: []string{"docker", "iac"},
-		AdvertisedCaps:      []string{"github-actions-runner"},
+		RuntimeCaps:         []string{"github-actions-runner"},
 	})
 	if err == nil {
 		t.Fatal("docker/iac workload must fail closed without advertised runtime extras")
@@ -234,13 +310,18 @@ func TestT594RunnerProviderInvokesEphemeralRunnerJobSpec(t *testing.T) {
 	}
 
 	result, err := module.InvokeMethod("ephemeral_runner_job", map[string]any{
-		"provider_token": "provider-token",
-		"environment":    "stg",
-		"os":             "linux",
-		"worker_id":      "worker-0123456789abcdef",
-		"task_id":        "task-abcdef9876543210",
-		"organization":   "GoCodeAlone",
-		"runner_group":   "workflow-compute-stg",
+		"provider_token":    "provider-token",
+		"mode":              "dispatch_then_wait",
+		"environment":       "stg",
+		"os":                "linux",
+		"worker_id":         "worker-0123456789abcdef",
+		"task_id":           "task-abcdef9876543210",
+		"organization":      "GoCodeAlone",
+		"repository":        "GoCodeAlone/workflow-compute",
+		"workflow":          "dogfood.yml",
+		"ref":               "main",
+		"runner_group":      "workflow-compute-stg",
+		"require_preflight": true,
 	})
 	if err != nil {
 		t.Fatalf("invoke ephemeral_runner_job: %v", err)
@@ -253,11 +334,56 @@ func TestT594RunnerProviderInvokesEphemeralRunnerJobSpec(t *testing.T) {
 	}
 }
 
+func TestT916RunnerProviderModuleAppliesEphemeralJobInputContract(t *testing.T) {
+	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
+		"token":          "github-token",
+		"provider_token": "provider-token",
+		"organizations":  []any{"GoCodeAlone"},
+	}, &fakeRunnerClient{})
+	if err != nil {
+		t.Fatalf("module: %v", err)
+	}
+	base := map[string]any{
+		"provider_token":    "provider-token",
+		"mode":              "dispatch_then_wait",
+		"environment":       "stg",
+		"os":                "linux",
+		"worker_id":         "worker-0123456789abcdef",
+		"task_id":           "task-abcdef9876543210",
+		"organization":      "GoCodeAlone",
+		"repository":        "GoCodeAlone/workflow-compute",
+		"workflow":          "dogfood.yml",
+		"ref":               "main",
+		"runner_group":      "workflow-compute-stg",
+		"require_preflight": true,
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{name: "missing_mode", mutate: func(input map[string]any) { delete(input, "mode") }},
+		{name: "non_linux", mutate: func(input map[string]any) { input["os"] = "windows" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input := make(map[string]any, len(base))
+			for key, value := range base {
+				input[key] = value
+			}
+			tc.mutate(input)
+			result, err := module.InvokeMethod("ephemeral_runner_job", input)
+			if err == nil || !strings.Contains(err.Error(), "input schema") {
+				t.Fatalf("contract-invalid module input: result=%+v err=%v", result, err)
+			}
+		})
+	}
+}
+
 type fakeEphemeralRunnerDriver struct {
 	mode                EphemeralRunnerJobMode
 	spec                EphemeralRunnerJobSpec
 	result              EphemeralRunnerJobResult
 	runErr              error
+	removeErr           error
 	blockUntilDone      bool
 	runDeadlineSet      bool
 	cleanupContextDone  bool
@@ -265,11 +391,7 @@ type fakeEphemeralRunnerDriver struct {
 	removedRunnerID     int64
 }
 
-func (f *fakeEphemeralRunnerDriver) OrgRegistrationToken(_ context.Context, _ string) (GitHubRunnerRegistrationToken, error) {
-	return GitHubRunnerRegistrationToken{Token: "runner-token", ExpiresAt: time.Now().Add(time.Hour)}, nil
-}
-
-func (f *fakeEphemeralRunnerDriver) RunGitHubJob(ctx context.Context, mode EphemeralRunnerJobMode, spec EphemeralRunnerJobSpec, _ GitHubRunnerRegistrationToken) (EphemeralRunnerJobResult, error) {
+func (f *fakeEphemeralRunnerDriver) RunGitHubJob(ctx context.Context, mode EphemeralRunnerJobMode, spec EphemeralRunnerJobSpec) (EphemeralRunnerJobResult, error) {
 	f.mode = mode
 	f.spec = spec
 	_, f.runDeadlineSet = ctx.Deadline()
@@ -288,5 +410,5 @@ func (f *fakeEphemeralRunnerDriver) RemoveOrgRunner(ctx context.Context, organiz
 	}
 	f.removedOrganization = organization
 	f.removedRunnerID = runnerID
-	return nil
+	return f.removeErr
 }

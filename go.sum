@@ -24,6 +24,8 @@ github.com/GoCodeAlone/modular/modules/reverseproxy/v2 v2.8.0 h1:cvdLHbM/vzvygQT
 github.com/GoCodeAlone/modular/modules/reverseproxy/v2 v2.8.0/go.mod h1:/9ipMG4qM2CHQ14BfXKdVlYRJelef6M8MFI5TbZv67M=
 github.com/GoCodeAlone/workflow v0.64.0 h1:2CpbYPwIqdGDb3xi3YJpwcteIum4ehBSrnRql/1YvB4=
 github.com/GoCodeAlone/workflow v0.64.0/go.mod h1:659GGDrw3QJ7b625y9rf8QhKIpt1VCoEG0MxKu5tGQs=
+github.com/GoCodeAlone/workflow-plugin-compute-core v0.8.3 h1:CIu6hIUXJx6PbmTq1xP9RKNuXJ9kBsIiJQoRuBvyj2U=
+github.com/GoCodeAlone/workflow-plugin-compute-core v0.8.3/go.mod h1:Dsw3miQN8eenpDaLzo/p0TolGtI7NyETkf9abAHZKSM=
 github.com/GoCodeAlone/yaegi v0.17.2 h1:WK6Y6e0t1a6U7r+S2dN3CGWW1PizYD3zO0zneToZPxM=
 github.com/GoCodeAlone/yaegi v0.17.2/go.mod h1:z5Pr6Wse6QJcQvpgxTxzMAevFarH0N37TG88Y9dprx0=
 github.com/IBM/sarama v1.47.0 h1:GcQFEd12+KzfPYeLgN69Fh7vLCtYRhVIx0rO4TZO318=

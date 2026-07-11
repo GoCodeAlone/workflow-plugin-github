@@ -46,6 +46,8 @@ message RunnerProviderModuleConfig {
   repeated string organizations = 5;
   // runner_groups is the optional allowlist of org runner groups the provider will accept.
   repeated string runner_groups = 6;
+  // state_dir stores durable exact-ID JIT runner ownership and cleanup state.
+  string state_dir = 7;
 }
 
 // ActionTriggerConfig is the typed config for step.gh_action_trigger.
