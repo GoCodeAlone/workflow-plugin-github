@@ -18,7 +18,7 @@
     {
       "id": "ephemeral_runner_job",
       "input_schema_ref": "schema://providers/workflow-plugin-github/github-runner/operations/ephemeral_runner_job/input/v1",
-      "input_schema_digest": "sha256:10d6749d367428f67f08ff92dbdeff8f67e69aabefdee07199e80ba518734bda",
+      "input_schema_digest": "sha256:fa3f6eb0bc024b6499e80ef0144d28eb8b3c866582e0d1cda10d5c4249a6ffbb",
       "output_schema_ref": "schema://providers/workflow-plugin-github/github-runner/operations/ephemeral_runner_job/output/v1",
       "output_schema_digest": "sha256:4b58e558d985133517d9a4f1862afb4673cb821d2f61249b4c61c573b38309cd",
       "artifacts": ["github-runner-proof.json", "github-workload-outputs.tar.gz"],

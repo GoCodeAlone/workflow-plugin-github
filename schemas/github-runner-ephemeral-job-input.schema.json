@@ -37,12 +37,14 @@
     "workflow": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 256
+      "maxLength": 256,
+      "pattern": "^\\S(?:.*\\S)?$"
     },
     "ref": {
       "type": "string",
       "minLength": 1,
-      "maxLength": 256
+      "maxLength": 256,
+      "pattern": "^\\S(?:.*\\S)?$"
     },
     "workflow_run_id": {
       "type": "integer",

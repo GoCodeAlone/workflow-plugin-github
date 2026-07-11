@@ -2744,6 +2744,16 @@ func TestT915CommandRejectsUnsafeContractInputBeforeSidecarAccess(t *testing.T) 
 			want:  "validate ephemeral runner input schema",
 		},
 		{
+			name:  "workflow with surrounding whitespace",
+			input: `{"mode":"dispatch_then_wait","environment":"stg","os":"linux","worker_id":"worker-1","task_id":"task-1","organization":"GoCodeAlone","repository":"GoCodeAlone/workflow-compute","workflow":" dogfood.yml ","ref":"main","runner_group":"ephemeral","require_preflight":true}`,
+			want:  "validate ephemeral runner input schema",
+		},
+		{
+			name:  "ref with surrounding whitespace",
+			input: `{"mode":"dispatch_then_wait","environment":"stg","os":"linux","worker_id":"worker-1","task_id":"task-1","organization":"GoCodeAlone","repository":"GoCodeAlone/workflow-compute","workflow":"dogfood.yml","ref":" main ","runner_group":"ephemeral","require_preflight":true}`,
+			want:  "validate ephemeral runner input schema",
+		},
+		{
 			name:  "unknown mode",
 			input: `{"mode":"delete","environment":"stg","os":"linux","worker_id":"worker-1","task_id":"task-1","organization":"GoCodeAlone","repository":"GoCodeAlone/workflow-compute","workflow":"dogfood.yml","ref":"main","runner_group":"ephemeral","require_preflight":true}`,
 			want:  "mode must be",
