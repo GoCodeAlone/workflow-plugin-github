@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema://providers/workflow-plugin-github/github-runner/operations/ephemeral_runner_job/output/v1",
+  "title": "GitHub ephemeral runner job output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "enum": ["github-runner-proof.json", "github-workload-outputs.tar.gz"]
+      },
+      "minItems": 1,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "contains": {
+        "const": "github-runner-proof.json"
+      },
+      "minContains": 1,
+      "maxContains": 1
+    }
+  },
+  "required": ["artifacts"]
+}

@@ -26,9 +26,10 @@ The module registers an HTTP handler at `/webhooks/github`. Configure your GitHu
 ### Module: `github.runner_provider`
 
 Provides the GitHub-owned side of the workflow-compute runner provider boundary.
-It mints repository- or organization-scoped GitHub Actions runner registration
-tokens, preflights organization runner labels/groups, and removes runners
-without exposing GitHub API credentials to workflow-compute.
+It mints general repository- or organization-scoped registration tokens,
+preflights organization runner labels/groups, creates exact ephemeral JIT runner
+configurations, and removes runners without exposing GitHub API credentials to
+workflow-compute.
 
 ```yaml
 modules:
@@ -40,6 +41,7 @@ modules:
       repositories: ["GoCodeAlone/workflow-compute"]
       organizations: ["GoCodeAlone"]
       runner_groups: ["workflow-compute-stg"]
+      state_dir: "/var/lib/workflow-github-runner-provider"
 ```
 
 For local proof runs, the repo also builds `github-runner-provider`, a small
@@ -51,12 +53,18 @@ GITHUB_RUNNER_PROVIDER_TOKEN=... \
 GITHUB_RUNNER_PROVIDER_REPOSITORIES=GoCodeAlone/workflow-compute \
 GITHUB_RUNNER_PROVIDER_ORGANIZATIONS=GoCodeAlone \
 GITHUB_RUNNER_PROVIDER_RUNNER_GROUPS=workflow-compute-stg \
+GITHUB_RUNNER_PROVIDER_STATE_DIR=/var/lib/workflow-github-runner-provider \
   bin/github-runner-provider 127.0.0.1:8090
 ```
 
 workflow-compute should point at that service with
 `COMPUTE_GITHUB_RUNNER_PROVIDER_URL` and
 `COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN`; it should not receive `GITHUB_TOKEN`.
+The `ephemeral_runner_job` operation uses the authenticated JIT endpoint, starts
+the bundled listener with `run.sh --jitconfig`, and unregisters only the exact
+provider-owned JIT runner ID recorded in the ownership journal. Workload outputs
+are returned through the declared `github-workload-outputs.tar.gz` provider
+artifact rather than arbitrary names.
 
 ### Step: `step.gh_action_trigger`
 

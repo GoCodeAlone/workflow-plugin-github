@@ -178,7 +178,9 @@ type RunnerProviderModuleConfig struct {
 	// organizations is the allowlist of org accounts the provider will serve runner tokens for.
 	Organizations []string `protobuf:"bytes,5,rep,name=organizations,proto3" json:"organizations,omitempty"`
 	// runner_groups is the optional allowlist of org runner groups the provider will accept.
-	RunnerGroups  []string `protobuf:"bytes,6,rep,name=runner_groups,json=runnerGroups,proto3" json:"runner_groups,omitempty"`
+	RunnerGroups []string `protobuf:"bytes,6,rep,name=runner_groups,json=runnerGroups,proto3" json:"runner_groups,omitempty"`
+	// state_dir stores durable exact-ID JIT runner ownership and cleanup state.
+	StateDir      string `protobuf:"bytes,7,opt,name=state_dir,json=stateDir,proto3" json:"state_dir,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -253,6 +255,13 @@ func (x *RunnerProviderModuleConfig) GetRunnerGroups() []string {
 		return x.RunnerGroups
 	}
 	return nil
+}
+
+func (x *RunnerProviderModuleConfig) GetStateDir() string {
+	if x != nil {
+		return x.StateDir
+	}
+	return ""
 }
 
 // ActionTriggerConfig is the typed config for step.gh_action_trigger.
@@ -3429,7 +3438,7 @@ const file_github_proto_rawDesc = "" +
 	"\x06app_id\x18\x01 \x01(\x03R\x05appId\x12'\n" +
 	"\x0finstallation_id\x18\x02 \x01(\x03R\x0einstallationId\x12\x1f\n" +
 	"\vprivate_key\x18\x03 \x01(\tR\n" +
-	"privateKey\"\xea\x01\n" +
+	"privateKey\"\x87\x02\n" +
 	"\x1aRunnerProviderModuleConfig\x12\x14\n" +
 	"\x05token\x18\x01 \x01(\tR\x05token\x12%\n" +
 	"\x0eprovider_token\x18\x02 \x01(\tR\rproviderToken\x12 \n" +
@@ -3437,7 +3446,8 @@ const file_github_proto_rawDesc = "" +
 	"apiBaseUrl\x12\"\n" +
 	"\frepositories\x18\x04 \x03(\tR\frepositories\x12$\n" +
 	"\rorganizations\x18\x05 \x03(\tR\rorganizations\x12#\n" +
-	"\rrunner_groups\x18\x06 \x03(\tR\frunnerGroups\"\xb4\x01\n" +
+	"\rrunner_groups\x18\x06 \x03(\tR\frunnerGroups\x12\x1b\n" +
+	"\tstate_dir\x18\a \x01(\tR\bstateDir\"\xb4\x01\n" +
 	"\x13ActionTriggerConfig\x12\x14\n" +
 	"\x05owner\x18\x01 \x01(\tR\x05owner\x12\x12\n" +
 	"\x04repo\x18\x02 \x01(\tR\x04repo\x12\x1a\n" +

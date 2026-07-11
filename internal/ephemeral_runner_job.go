@@ -14,6 +14,8 @@ var ErrEphemeralRunnerCapabilityUnsupported = errors.New("ephemeral runner capab
 
 const ephemeralRunnerCleanupTimeout = 30 * time.Second
 
+var ephemeralRunnerCleanupRetryInterval = 250 * time.Millisecond
+
 type EphemeralRunnerJobMode string
 
 const (
@@ -31,13 +33,16 @@ type EphemeralRunnerJobRequest struct {
 	Repository          string                 `json:"repository,omitempty"`
 	Workflow            string                 `json:"workflow,omitempty"`
 	Ref                 string                 `json:"ref,omitempty"`
+	WorkflowRunID       int64                  `json:"workflow_run_id,omitempty"`
+	WorkflowJobID       int64                  `json:"workflow_job_id,omitempty"`
 	WorkflowInputs      map[string]string      `json:"workflow_inputs,omitempty"`
+	ArtifactPaths       []string               `json:"artifact_paths,omitempty"`
 	RunnerGroup         string                 `json:"runner_group,omitempty"`
 	RequirePreflight    bool                   `json:"require_preflight,omitempty"`
 	TimeoutSeconds      int                    `json:"timeout_seconds,omitempty"`
 	Timeout             time.Duration          `json:"-"`
 	RequiredRuntimeCaps []string               `json:"required_runtime_caps,omitempty"`
-	AdvertisedCaps      []string               `json:"advertised_caps,omitempty"`
+	RuntimeCaps         []string               `json:"-"`
 }
 
 type EphemeralRunnerJobSpec struct {
@@ -47,23 +52,23 @@ type EphemeralRunnerJobSpec struct {
 }
 
 type EphemeralRunnerJobResult struct {
-	RunnerID          int64                          `json:"runner_id"`
-	RunnerName        string                         `json:"runner_name"`
-	Labels            []string                       `json:"labels"`
-	WorkflowRunID     int64                          `json:"workflow_run_id"`
-	WorkflowJobID     int64                          `json:"workflow_job_id"`
-	WorkflowJobStatus string                         `json:"workflow_job_status,omitempty"`
-	WorkerID          string                         `json:"worker_id"`
-	TaskID            string                         `json:"task_id"`
-	ArtifactRefs      []string                       `json:"artifact_refs"`
-	CleanupStatus     string                         `json:"cleanup_status"`
-	Preflight         *GitHubRunnerProviderPreflight `json:"preflight,omitempty"`
-	RedactedError     string                         `json:"redacted_error,omitempty"`
+	RunnerID                   int64                          `json:"runner_id"`
+	RunnerName                 string                         `json:"runner_name"`
+	Labels                     []string                       `json:"labels"`
+	WorkflowRunID              int64                          `json:"workflow_run_id"`
+	WorkflowJobID              int64                          `json:"workflow_job_id"`
+	WorkflowJobStatus          string                         `json:"workflow_job_status,omitempty"`
+	WorkflowVerificationStatus string                         `json:"workflow_verification_status,omitempty"`
+	WorkerID                   string                         `json:"worker_id"`
+	TaskID                     string                         `json:"task_id"`
+	WorkloadArtifacts          []string                       `json:"workload_artifacts,omitempty"`
+	CleanupStatus              string                         `json:"cleanup_status"`
+	Preflight                  *GitHubRunnerProviderPreflight `json:"preflight,omitempty"`
+	RedactedError              string                         `json:"redacted_error,omitempty"`
 }
 
 type EphemeralRunnerJobDriver interface {
-	OrgRegistrationToken(ctx context.Context, organization string) (GitHubRunnerRegistrationToken, error)
-	RunGitHubJob(ctx context.Context, mode EphemeralRunnerJobMode, spec EphemeralRunnerJobSpec, token GitHubRunnerRegistrationToken) (EphemeralRunnerJobResult, error)
+	RunGitHubJob(ctx context.Context, mode EphemeralRunnerJobMode, spec EphemeralRunnerJobSpec) (EphemeralRunnerJobResult, error)
 	RemoveOrgRunner(ctx context.Context, organization string, runnerID int64) error
 }
 
@@ -107,15 +112,20 @@ func BuildEphemeralRunnerJobSpec(req EphemeralRunnerJobRequest) (EphemeralRunner
 }
 
 func (j *EphemeralRunnerJob) Run(ctx context.Context, req EphemeralRunnerJobRequest) (EphemeralRunnerJobResult, error) {
-	if err := requireEphemeralRunnerCapabilities(req.RequiredRuntimeCaps, req.AdvertisedCaps); err != nil {
-		return EphemeralRunnerJobResult{}, err
-	}
-	if j == nil || j.driver == nil {
-		return EphemeralRunnerJobResult{}, errors.New("ephemeral runner job driver is required")
-	}
 	spec, err := BuildEphemeralRunnerJobSpec(req)
 	if err != nil {
 		return EphemeralRunnerJobResult{}, err
+	}
+	failureResult := EphemeralRunnerJobResult{CleanupStatus: "skipped"}
+	fillEphemeralRunnerResult(&failureResult, req, spec)
+	requiredCapabilities := make([]string, 0, len(req.RequiredRuntimeCaps)+1)
+	requiredCapabilities = append(requiredCapabilities, "github-actions-runner")
+	requiredCapabilities = append(requiredCapabilities, req.RequiredRuntimeCaps...)
+	if err := requireEphemeralRunnerCapabilities(requiredCapabilities, req.RuntimeCaps); err != nil {
+		return failureResult, err
+	}
+	if j == nil || j.driver == nil {
+		return failureResult, errors.New("ephemeral runner job driver is required")
 	}
 	jobCtx := ctx
 	cancel := func() {}
@@ -123,19 +133,31 @@ func (j *EphemeralRunnerJob) Run(ctx context.Context, req EphemeralRunnerJobRequ
 		jobCtx, cancel = context.WithTimeout(ctx, req.Timeout)
 	}
 	defer cancel()
-	token, err := j.driver.OrgRegistrationToken(jobCtx, req.Organization)
-	if err != nil {
-		return EphemeralRunnerJobResult{}, err
-	}
-	result, runErr := j.driver.RunGitHubJob(jobCtx, req.Mode, spec, token)
+	result, runErr := j.driver.RunGitHubJob(jobCtx, req.Mode, spec)
 	if result.RunnerID > 0 {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.WithoutCancel(ctx), ephemeralRunnerCleanupTimeout)
 		defer cleanupCancel()
-		if err := j.driver.RemoveOrgRunner(cleanupCtx, req.Organization, result.RunnerID); err != nil {
-			result.CleanupStatus = "remove_failed"
-			if runErr == nil {
-				runErr = err
+		var cleanupErr error
+		for attempt := 0; attempt < 5; attempt++ {
+			cleanupErr = j.driver.RemoveOrgRunner(cleanupCtx, req.Organization, result.RunnerID)
+			if cleanupErr == nil {
+				break
 			}
+			if attempt == 4 {
+				break
+			}
+			timer := time.NewTimer(ephemeralRunnerCleanupRetryInterval)
+			select {
+			case <-timer.C:
+			case <-cleanupCtx.Done():
+				timer.Stop()
+				cleanupErr = errors.Join(cleanupErr, cleanupCtx.Err())
+				attempt = 4
+			}
+		}
+		if cleanupErr != nil {
+			result.CleanupStatus = "remove_failed"
+			runErr = errors.Join(runErr, cleanupErr)
 		} else {
 			result.CleanupStatus = "removed"
 		}

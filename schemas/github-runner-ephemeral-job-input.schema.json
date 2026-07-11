@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema://providers/workflow-plugin-github/github-runner/operations/ephemeral_runner_job/input/v1",
+  "title": "GitHub ephemeral runner job input",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "mode": {
+      "type": "string",
+      "enum": ["dispatch_then_wait", "attach_to_queued"]
+    },
+    "environment": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "os": {
+      "const": "linux"
+    },
+    "worker_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "task_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "organization": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$"
+    },
+    "repository": {
+      "type": "string",
+      "pattern": "^[^/\\s]+/[^/\\s]+$"
+    },
+    "workflow": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^\\S(?:.*\\S)?$"
+    },
+    "ref": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^\\S(?:.*\\S)?$"
+    },
+    "workflow_run_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "workflow_job_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "workflow_inputs": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z0-9_-]{1,100}$"
+      },
+      "additionalProperties": {
+        "type": "string",
+        "maxLength": 65535
+      },
+      "maxProperties": 22
+    },
+    "artifact_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$",
+        "maxLength": 1024,
+        "not": {
+          "pattern": "(^|/)\\.{1,2}(/|$)"
+        }
+      },
+      "uniqueItems": true,
+      "maxItems": 64
+    },
+    "runner_group": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "require_preflight": {
+      "const": true
+    },
+    "timeout_seconds": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 21600
+    },
+    "required_runtime_caps": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128
+      },
+      "uniqueItems": true,
+      "maxItems": 64
+    }
+  },
+  "required": [
+    "mode",
+    "environment",
+    "os",
+    "worker_id",
+    "task_id",
+    "organization",
+    "repository",
+    "workflow",
+    "ref",
+    "runner_group",
+    "require_preflight"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "mode": {
+            "const": "attach_to_queued"
+          }
+        },
+        "required": ["mode"]
+      },
+      "then": {
+        "required": ["workflow_run_id", "workflow_job_id"]
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            {
+              "required": ["workflow_run_id"]
+            },
+            {
+              "required": ["workflow_job_id"]
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

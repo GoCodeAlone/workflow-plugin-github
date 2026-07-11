@@ -1,0 +1,66 @@
+{
+  "protocol_version": "compute.v1alpha1",
+  "id": "github-runner-v1",
+  "plugin_id": "workflow-plugin-github",
+  "provider_id": "github-runner",
+  "contract_id": "github.runner_provider.v1",
+  "version": "v0.0.0",
+  "display_name": "GitHub Ephemeral Actions Runner",
+  "config_schema_ref": "schema://providers/workflow-plugin-github/github-runner/v1",
+  "config_schema_digest": "sha256:1df9dc834a62f58bee9b78e09e92d42f8589d4df47c5322fbb7a683f88e71d80",
+  "operating_modes": ["batch"],
+  "workload_kinds": ["provider"],
+  "executor_providers": ["github-actions-runner"],
+  "execution_security_tiers": ["sandboxed-container"],
+  "proof_tiers": ["artifact-hash"],
+  "network_modes": ["direct"],
+  "operations": [
+    {
+      "id": "ephemeral_runner_job",
+      "input_schema_ref": "schema://providers/workflow-plugin-github/github-runner/operations/ephemeral_runner_job/input/v1",
+      "input_schema_digest": "sha256:fa3f6eb0bc024b6499e80ef0144d28eb8b3c866582e0d1cda10d5c4249a6ffbb",
+      "output_schema_ref": "schema://providers/workflow-plugin-github/github-runner/operations/ephemeral_runner_job/output/v1",
+      "output_schema_digest": "sha256:4b58e558d985133517d9a4f1862afb4673cb821d2f61249b4c61c573b38309cd",
+      "artifacts": ["github-runner-proof.json", "github-workload-outputs.tar.gz"],
+      "artifact_specs": [
+        {
+          "name": "github-runner-proof.json",
+          "required": true,
+          "content_type": "application/json",
+          "max_bytes": 262144
+        },
+        {
+          "name": "github-workload-outputs.tar.gz",
+          "required": false,
+          "content_type": "application/gzip",
+          "max_bytes": 268435456
+        }
+      ]
+    }
+  ],
+  "runtime_contract": {
+    "profiles": [
+      {
+        "id": "github-actions-runner-sandboxed-container-artifact-hash-runtime",
+        "runtime_profile": "sandboxed-oci-v1",
+        "executor_provider": "github-actions-runner",
+        "execution_security_tier": "sandboxed-container",
+        "proof_tier": "artifact-hash",
+        "allowed_runtime_tools": ["podman", "docker", "nerdctl"],
+        "image_digest_required": true,
+        "rootfs_digest_required": true,
+        "allowed_mount_refs": ["workspace"],
+        "writable_paths": ["/tmp"],
+        "writable_rootfs": "forbidden",
+        "privileged": "forbidden",
+        "host_namespaces": "forbidden",
+        "host_socket": "forbidden",
+        "seccomp_disable": "forbidden",
+        "no_new_privileges_disable": "forbidden",
+        "allowed_capabilities": [],
+        "conformance_profiles": ["sandboxed-oci-v1"],
+        "host_workspace_supported": true
+      }
+    ]
+  }
+}

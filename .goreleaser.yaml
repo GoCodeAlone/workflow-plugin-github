@@ -4,8 +4,14 @@ project_name: workflow-plugin-github
 
 before:
   hooks:
-    - go mod tidy
-    - "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' plugin.json && rm -f plugin.json.bak"
+    - go mod tidy -diff
+    - 'test -n "{{ .Env.GORELEASER_RENDER_DIR }}"'
+    - 'rm -rf "{{ .Env.GORELEASER_RENDER_DIR }}"'
+    - 'mkdir -p "{{ .Env.GORELEASER_RENDER_DIR }}/contracts"'
+    - 'cp plugin.json "{{ .Env.GORELEASER_RENDER_DIR }}/plugin.json"'
+    - 'cp contracts/github-runner-provider.json "{{ .Env.GORELEASER_RENDER_DIR }}/contracts/github-runner-provider.json"'
+    - "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' \"{{ .Env.GORELEASER_RENDER_DIR }}/plugin.json\" && rm -f \"{{ .Env.GORELEASER_RENDER_DIR }}/plugin.json.bak\""
+    - "sed -i.bak 's/\"version\": \"v.*\"/\"version\": \"v{{ .Version }}\"/' \"{{ .Env.GORELEASER_RENDER_DIR }}/contracts/github-runner-provider.json\" && rm -f \"{{ .Env.GORELEASER_RENDER_DIR }}/contracts/github-runner-provider.json.bak\""
 
 builds:
   - id: workflow-plugin-github
@@ -44,22 +50,28 @@ builds:
       - GOPRIVATE=github.com/GoCodeAlone/*
     goos:
       - linux
-      - darwin
-      - windows
     goarch:
       - amd64
       - arm64
 
 archives:
   - id: workflow-plugin-github
+    allow_different_binary_count: true
     ids:
       - workflow-plugin-github
       - github-runner-provider
       - github-actions-runner-job
     name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
     files:
-      - plugin.json
+      - src: "{{ .Env.GORELEASER_RENDER_DIR }}/plugin.json"
+        dst: plugin.json
       - plugin.contracts.json
+      - provider.contracts.json
+      - src: "{{ .Env.GORELEASER_RENDER_DIR }}/contracts/github-runner-provider.json"
+        dst: contracts/github-runner-provider.json
+      - schemas/github-runner-provider.schema.json
+      - schemas/github-runner-ephemeral-job-input.schema.json
+      - schemas/github-runner-ephemeral-job-output.schema.json
       - LICENSE
 
 checksum:
