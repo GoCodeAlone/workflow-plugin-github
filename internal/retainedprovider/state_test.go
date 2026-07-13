@@ -53,6 +53,7 @@ func TestConfigRejectsUnsafeIdentityAndPaths(t *testing.T) {
 		{name: "relative install root", mutate: func(c *Config) { c.InstallRoot = "relative" }, want: "install_root"},
 		{name: "outside home", mutate: func(c *Config) { c.SystemdDir = filepath.Join(filepath.Dir(home), "outside") }, want: "systemd_dir"},
 		{name: "plaintext provider URL", mutate: func(c *Config) { c.ProviderURL = "http://provider:18090" }, want: "provider_url"},
+		{name: "wrong provider port", mutate: func(c *Config) { c.ProviderURL = "https://" + c.StableContainer + ":18091" }, want: "provider_url"},
 		{name: "wrong network", mutate: func(c *Config) { c.ContainerNetwork = "host" }, want: "container_network"},
 		{name: "short ref", mutate: func(c *Config) { c.Ref = "main" }, want: "ref"},
 		{name: "fast timer", mutate: func(c *Config) { c.RefreshIntervalSeconds = 10 }, want: "refresh_interval_seconds"},
@@ -107,7 +108,7 @@ func TestActiveStateRetainsDistinctCurrentAndPriorImages(t *testing.T) {
 	current := validTestSelection(now)
 	previous := validTestSelection(now.Add(-time.Hour))
 	previous.ImageID = "sha256:" + strings.Repeat("c", 64)
-	previous.ImageRef = "localhost/workflow-plugin-github-runner-provider:sha256-dddddddddddd"
+	previous.ImageRef = "localhost/workflow-plugin-github-runner-provider:sha256-" + strings.Repeat("d", 64)
 	previous.Update.DirectiveID = "directive-prior"
 	previous.Update.SHA256 = "sha256:" + strings.Repeat("d", 64)
 	state := ActiveState{
@@ -129,7 +130,7 @@ func TestRecoverySelectionForEveryJournalPhase(t *testing.T) {
 	previous := ActiveState{ProtocolVersion: ActiveStateProtocolVersion, Current: validTestSelection(now.Add(-time.Hour)), UpdatedAt: now.Add(-time.Hour)}
 	candidate := validTestSelection(now)
 	candidate.ImageID = "sha256:" + strings.Repeat("c", 64)
-	candidate.ImageRef = "localhost/workflow-plugin-github-runner-provider:sha256-dddddddddddd"
+	candidate.ImageRef = "localhost/workflow-plugin-github-runner-provider:sha256-" + strings.Repeat("d", 64)
 	candidate.Update.SHA256 = "sha256:" + strings.Repeat("d", 64)
 	candidate.Update.DirectiveID = "directive-new"
 
@@ -248,7 +249,7 @@ func validTestSelection(now time.Time) ImageSelection {
 			SHA256:      "sha256:" + strings.Repeat("a", 64),
 		},
 		ImageID:     "sha256:" + strings.Repeat("b", 64),
-		ImageRef:    "localhost/workflow-plugin-github-runner-provider:sha256-aaaaaaaaaaaa",
+		ImageRef:    "localhost/workflow-plugin-github-runner-provider:sha256-" + strings.Repeat("a", 64),
 		ActivatedAt: now,
 	}
 }

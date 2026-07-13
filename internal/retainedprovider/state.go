@@ -1,7 +1,9 @@
 package retainedprovider
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -16,7 +18,7 @@ const (
 
 var (
 	digestPattern   = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	imageRefPattern = regexp.MustCompile(`^localhost/[a-z0-9]+(?:[._/-][a-z0-9]+)*:sha256-[0-9a-f]{12,64}$`)
+	imageRefPattern = regexp.MustCompile(`^localhost/[a-z0-9]+(?:[._/-][a-z0-9]+)*:sha256-[0-9a-f]{64}$`)
 )
 
 type VerifiedUpdate struct {
@@ -75,7 +77,7 @@ func (selection ImageSelection) Validate() error {
 		return fmt.Errorf("image_id must be an immutable SHA-256 digest")
 	}
 	digest := strings.TrimPrefix(selection.Update.SHA256, "sha256:")
-	if !imageRefPattern.MatchString(selection.ImageRef) || !strings.HasSuffix(selection.ImageRef, ":sha256-"+digest[:12]) {
+	if !imageRefPattern.MatchString(selection.ImageRef) || !strings.HasSuffix(selection.ImageRef, ":sha256-"+digest) {
 		return fmt.Errorf("image_ref must be a safe localhost reference derived from the update digest")
 	}
 	if selection.ActivatedAt.IsZero() {
@@ -192,4 +194,10 @@ type Status struct {
 	CurrentVersion  string    `json:"current_version,omitempty"`
 	CurrentSHA256   string    `json:"current_sha256,omitempty"`
 	ObservedAt      time.Time `json:"observed_at,omitempty"`
+}
+
+func WriteStatus(writer io.Writer, status Status) error {
+	encoder := json.NewEncoder(writer)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(status)
 }

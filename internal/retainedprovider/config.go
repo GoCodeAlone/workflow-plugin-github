@@ -69,6 +69,20 @@ func DecodeConfig(reader io.Reader, home string) (Config, error) {
 	return config, nil
 }
 
+func ReadConfigFile(path, home string) (Config, error) {
+	if err := ValidateUserPath(home, path, true); err != nil {
+		return Config{}, fmt.Errorf("config path: %w", err)
+	}
+	var config Config
+	if err := ReadStrictJSONFile(path, &config); err != nil {
+		return Config{}, fmt.Errorf("read retained provider config: %w", err)
+	}
+	if err := config.Validate(home); err != nil {
+		return Config{}, err
+	}
+	return config, nil
+}
+
 func (config Config) Validate(home string) error {
 	if config.ProtocolVersion != ConfigProtocolVersion {
 		return fmt.Errorf("protocol_version must be %q", ConfigProtocolVersion)
@@ -115,7 +129,7 @@ func (config Config) Validate(home string) error {
 		}
 	}
 	providerURL, err := url.Parse(config.ProviderURL)
-	if err != nil || providerURL.Scheme != "https" || providerURL.Host == "" || providerURL.User != nil || providerURL.RawQuery != "" || providerURL.Fragment != "" {
+	if err != nil || providerURL.Scheme != "https" || providerURL.Host == "" || providerURL.User != nil || providerURL.RawQuery != "" || providerURL.Fragment != "" || (providerURL.Path != "" && providerURL.Path != "/") || providerURL.Port() != "18090" {
 		return fmt.Errorf("provider_url must be an HTTPS URL without credentials, query, or fragment")
 	}
 	if providerURL.Hostname() != config.StableContainer {
