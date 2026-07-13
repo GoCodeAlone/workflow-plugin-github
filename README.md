@@ -57,6 +57,15 @@ GITHUB_RUNNER_PROVIDER_STATE_DIR=/var/lib/workflow-github-runner-provider \
   bin/github-runner-provider 127.0.0.1:8090
 ```
 
+For a provider endpoint reachable outside host loopback, configure TLS with both
+`GITHUB_RUNNER_PROVIDER_TLS_CERT_FILE` and
+`GITHUB_RUNNER_PROVIDER_TLS_KEY_FILE`. The runner job continues to reject
+plaintext bearer transport except for literal loopback IP endpoints and never
+follows provider redirects. A private certificate authority can be supplied to
+the runner job as base64-encoded PEM in
+`COMPUTE_GITHUB_RUNNER_PROVIDER_CA_CERT_B64`; certificate verification and
+hostname verification remain enabled.
+
 workflow-compute should point at that service with
 `COMPUTE_GITHUB_RUNNER_PROVIDER_URL` and
 `COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN`; it should not receive `GITHUB_TOKEN`.

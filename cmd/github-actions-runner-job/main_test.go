@@ -5,10 +5,14 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -2827,7 +2831,7 @@ func TestT915ProviderSidecarURLRejectsInsecureBearerTransport(t *testing.T) {
 	}{
 		{name: "https", baseURL: "https://provider.example.invalid", valid: true},
 		{name: "loopback IPv4", baseURL: "http://127.0.0.1:8090", valid: true},
-		{name: "loopback hostname", baseURL: "http://localhost:8090", valid: true},
+		{name: "loopback hostname", baseURL: "http://localhost:8090", valid: false},
 		{name: "external plaintext", baseURL: "http://provider.example.invalid", valid: false},
 		{name: "credentials", baseURL: "https://user@provider.example.invalid", valid: false},
 		{name: "query", baseURL: "https://provider.example.invalid?token=unsafe", valid: false},
@@ -2843,6 +2847,215 @@ func TestT915ProviderSidecarURLRejectsInsecureBearerTransport(t *testing.T) {
 				t.Fatalf("unsafe sidecar URL error = %v", err)
 			}
 		})
+	}
+}
+
+func TestT915ProviderSidecarRejectsRedirects(t *testing.T) {
+	var redirected bool
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirected" {
+			redirected = true
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+			return
+		}
+		http.Redirect(w, r, "/redirected", http.StatusFound)
+	}))
+	defer server.Close()
+
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", server.URL)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "provider-token")
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_CA_CERT_B64", base64.StdEncoding.EncodeToString(caPEM))
+
+	client, err := newSidecarClientFromEnv()
+	if err != nil {
+		t.Fatalf("create sidecar client: %v", err)
+	}
+	if err := client.do(context.Background(), http.MethodGet, "/healthz", nil, http.StatusOK, nil); err == nil || !strings.Contains(err.Error(), "redirect") {
+		t.Fatalf("redirect error = %v", err)
+	}
+	if redirected {
+		t.Fatal("provider client followed redirect")
+	}
+}
+
+func TestT915ProviderSidecarHTTPSAcceptsExplicitCertificateAuthority(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer provider-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	}))
+	defer server.Close()
+
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", server.URL)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "provider-token")
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_CA_CERT_B64", base64.StdEncoding.EncodeToString(caPEM))
+
+	client, err := newSidecarClientFromEnv()
+	if err != nil {
+		t.Fatalf("create sidecar client with explicit CA: %v", err)
+	}
+	var health map[string]string
+	if err := client.do(context.Background(), http.MethodGet, "/healthz", nil, http.StatusOK, &health); err != nil {
+		t.Fatalf("call sidecar using explicit CA: %v", err)
+	}
+	if health["status"] != "ok" {
+		t.Fatalf("health = %+v", health)
+	}
+}
+
+func TestT915ProviderCommandAndRunnerClientCompleteTLSHealthRoundTrip(t *testing.T) {
+	tlsFixture := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	certificate := tlsFixture.TLS.Certificates[0]
+	tlsFixture.Close()
+
+	tlsDir := t.TempDir()
+	certFile := filepath.Join(tlsDir, "provider.crt")
+	keyFile := filepath.Join(tlsDir, "provider.key")
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Certificate[0]})
+	keyDER, err := x509.MarshalPKCS8PrivateKey(certificate.PrivateKey)
+	if err != nil {
+		t.Fatalf("marshal provider private key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	if err := os.WriteFile(certFile, certPEM, 0o600); err != nil {
+		t.Fatalf("write provider certificate: %v", err)
+	}
+	if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
+		t.Fatalf("write provider key: %v", err)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserve provider address: %v", err)
+	}
+	providerAddress := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release provider address: %v", err)
+	}
+
+	providerBinary := filepath.Join(t.TempDir(), "github-runner-provider")
+	build := exec.Command("go", "build", "-o", providerBinary, "../github-runner-provider")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build real provider command: %v\n%s", err, output)
+	}
+	providerLogPath := filepath.Join(t.TempDir(), "provider.log")
+	providerLog, err := os.OpenFile(providerLogPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		t.Fatalf("open provider log: %v", err)
+	}
+	provider := exec.Command(providerBinary, providerAddress)
+	provider.Stdout = providerLog
+	provider.Stderr = providerLog
+	provider.Env = append(os.Environ(),
+		"GITHUB_RUNNER_PROVIDER_GITHUB_TOKEN=test-github-token",
+		"GITHUB_RUNNER_PROVIDER_TOKEN=test-provider-token",
+		"GITHUB_RUNNER_PROVIDER_REPOSITORIES=GoCodeAlone/workflow-compute",
+		"GITHUB_RUNNER_PROVIDER_ORGANIZATIONS=GoCodeAlone",
+		"GITHUB_RUNNER_PROVIDER_RUNNER_GROUPS=ephemeral",
+		"GITHUB_RUNNER_PROVIDER_STATE_DIR="+filepath.Join(tlsDir, "state"),
+		"GITHUB_RUNNER_PROVIDER_TLS_CERT_FILE="+certFile,
+		"GITHUB_RUNNER_PROVIDER_TLS_KEY_FILE="+keyFile,
+	)
+	if err := provider.Start(); err != nil {
+		_ = providerLog.Close()
+		t.Fatalf("start real provider command: %v", err)
+	}
+	t.Cleanup(func() {
+		if provider.ProcessState == nil {
+			_ = provider.Process.Kill()
+			_ = provider.Wait()
+		}
+		_ = providerLog.Close()
+	})
+
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", "https://"+providerAddress)
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "test-provider-token")
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_CA_CERT_B64", base64.StdEncoding.EncodeToString(certPEM))
+	client, err := newSidecarClientFromEnv()
+	if err != nil {
+		t.Fatalf("create production sidecar client: %v", err)
+	}
+	var health map[string]string
+	for attempt := 0; attempt < 50; attempt++ {
+		err = client.do(context.Background(), http.MethodGet, "/healthz", nil, http.StatusOK, &health)
+		if err == nil {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err != nil {
+		_ = providerLog.Close()
+		output, _ := os.ReadFile(providerLogPath)
+		t.Fatalf("real provider TLS health request: %v\n%s", err, output)
+	}
+	if health["status"] != "ok" {
+		t.Fatalf("real provider health = %+v", health)
+	}
+}
+
+func TestT915ProviderSidecarCertificateAuthorityKeepsHostnameVerification(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", strings.Replace(server.URL, "127.0.0.1", "localhost", 1))
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "provider-token")
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_CA_CERT_B64", base64.StdEncoding.EncodeToString(caPEM))
+
+	client, err := newSidecarClientFromEnv()
+	if err != nil {
+		t.Fatalf("create sidecar client with explicit CA: %v", err)
+	}
+	if err := client.do(context.Background(), http.MethodGet, "/healthz", nil, http.StatusOK, nil); err == nil || !strings.Contains(err.Error(), "certificate") {
+		t.Fatalf("hostname mismatch error = %v", err)
+	}
+}
+
+func TestT915ProviderSidecarCertificateAuthorityRequiresHTTPS(t *testing.T) {
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", "http://127.0.0.1:8090")
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "provider-token")
+	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_CA_CERT_B64", base64.StdEncoding.EncodeToString([]byte("unused")))
+	if _, err := newSidecarClientFromEnv(); err == nil || !strings.Contains(err.Error(), "requires an HTTPS provider URL") {
+		t.Fatalf("plaintext provider CA error = %v", err)
+	}
+}
+
+func TestT915ProviderSidecarRejectsMalformedCertificateAuthority(t *testing.T) {
+	for _, encoded := range []string{
+		"not-base64",
+		base64.StdEncoding.EncodeToString([]byte("not a PEM certificate")),
+	} {
+		t.Run(encoded, func(t *testing.T) {
+			t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", "https://provider.example.invalid")
+			t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "provider-token")
+			t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_CA_CERT_B64", encoded)
+			if _, err := newSidecarClientFromEnv(); err == nil || !strings.Contains(err.Error(), "provider CA certificate") {
+				t.Fatalf("malformed provider CA error = %v", err)
+			}
+		})
+	}
+}
+
+func TestT915ProviderCertificateAuthorityWorksWithoutSystemRoots(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	defer server.Close()
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+
+	pool, err := providerCertificatePool(caPEM, func() (*x509.CertPool, error) {
+		return nil, errors.New("system roots unavailable")
+	})
+	if err != nil {
+		t.Fatalf("build explicit provider certificate pool: %v", err)
+	}
+	certificate, err := x509.ParseCertificate(server.Certificate().Raw)
+	if err != nil {
+		t.Fatalf("parse explicit provider certificate: %v", err)
+	}
+	if _, err := certificate.Verify(x509.VerifyOptions{Roots: pool}); err != nil {
+		t.Fatalf("verify explicit provider certificate: %v", err)
 	}
 }
 

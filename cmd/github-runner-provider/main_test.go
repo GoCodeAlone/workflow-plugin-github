@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"io"
 	"log/slog"
@@ -35,6 +36,25 @@ type contextCheckingStopper struct {
 	expired bool
 }
 
+type recordingProviderHTTPServer struct {
+	plainCalls int
+	tlsCalls   int
+	certFile   string
+	keyFile    string
+}
+
+func (s *recordingProviderHTTPServer) ListenAndServe() error {
+	s.plainCalls++
+	return http.ErrServerClosed
+}
+
+func (s *recordingProviderHTTPServer) ListenAndServeTLS(certFile, keyFile string) error {
+	s.tlsCalls++
+	s.certFile = certFile
+	s.keyFile = keyFile
+	return http.ErrServerClosed
+}
+
 func (s *contextCheckingStopper) Stop(ctx context.Context) error {
 	s.called = true
 	s.expired = ctx.Err() != nil
@@ -45,6 +65,91 @@ func TestProviderHTTPServerHasBoundedConnectionTimeouts(t *testing.T) {
 	server := newProviderHTTPServer("127.0.0.1:0", http.NewServeMux())
 	if server.ReadHeaderTimeout <= 0 || server.ReadTimeout <= 0 || server.WriteTimeout <= 0 || server.IdleTimeout <= 0 {
 		t.Fatalf("provider HTTP timeouts are not fully bounded: %+v", server)
+	}
+	if server.TLSConfig == nil || server.TLSConfig.MinVersion < tls.VersionTLS12 {
+		t.Fatalf("provider TLS minimum is not pinned to TLS 1.2+: %+v", server.TLSConfig)
+	}
+}
+
+func TestProviderTLSFilesRequireCertificateAndKeyTogether(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		certFile string
+		keyFile  string
+		wantErr  bool
+	}{
+		{name: "disabled"},
+		{name: "enabled", certFile: "/tls/provider.crt", keyFile: "/tls/provider.key"},
+		{name: "certificate only", certFile: "/tls/provider.crt", wantErr: true},
+		{name: "key only", keyFile: "/tls/provider.key", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GITHUB_RUNNER_PROVIDER_TLS_CERT_FILE", tc.certFile)
+			t.Setenv("GITHUB_RUNNER_PROVIDER_TLS_KEY_FILE", tc.keyFile)
+			certFile, keyFile, err := providerTLSFilesFromEnvironment()
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "must be set together") {
+					t.Fatalf("TLS file error = %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("TLS files: %v", err)
+			}
+			if certFile != tc.certFile || keyFile != tc.keyFile {
+				t.Fatalf("TLS files = %q, %q", certFile, keyFile)
+			}
+		})
+	}
+}
+
+func TestProviderTransportRequiresTLSOutsideLiteralLoopback(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		addr     string
+		certFile string
+		keyFile  string
+		wantErr  bool
+	}{
+		{name: "IPv4 loopback plaintext", addr: "127.0.0.1:8090"},
+		{name: "IPv6 loopback plaintext", addr: "[::1]:8090"},
+		{name: "hostname plaintext", addr: "localhost:8090", wantErr: true},
+		{name: "wildcard plaintext", addr: "0.0.0.0:8090", wantErr: true},
+		{name: "empty host plaintext", addr: ":8090", wantErr: true},
+		{name: "external plaintext", addr: "192.0.2.10:8090", wantErr: true},
+		{name: "wildcard TLS", addr: "0.0.0.0:8090", certFile: "/tls/provider.crt", keyFile: "/tls/provider.key"},
+		{name: "malformed", addr: "not-an-address", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateProviderTransport(tc.addr, tc.certFile, tc.keyFile)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("unsafe provider transport accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("safe provider transport rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestServeProviderHTTPUsesConfiguredTransport(t *testing.T) {
+	plain := &recordingProviderHTTPServer{}
+	if err := serveProviderHTTP(plain, "", ""); !errors.Is(err, http.ErrServerClosed) {
+		t.Fatalf("plain serve: %v", err)
+	}
+	if plain.plainCalls != 1 || plain.tlsCalls != 0 {
+		t.Fatalf("plain calls = %+v", plain)
+	}
+
+	tlsServer := &recordingProviderHTTPServer{}
+	if err := serveProviderHTTP(tlsServer, "/tls/provider.crt", "/tls/provider.key"); !errors.Is(err, http.ErrServerClosed) {
+		t.Fatalf("TLS serve: %v", err)
+	}
+	if tlsServer.plainCalls != 0 || tlsServer.tlsCalls != 1 || tlsServer.certFile != "/tls/provider.crt" || tlsServer.keyFile != "/tls/provider.key" {
+		t.Fatalf("TLS calls = %+v", tlsServer)
 	}
 }
 
