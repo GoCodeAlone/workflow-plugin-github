@@ -26,8 +26,8 @@ type providerHTTPShutdowner interface {
 }
 
 type providerHTTPServer interface {
-	ListenAndServe() error
-	ListenAndServeTLS(certFile, keyFile string) error
+	Serve(net.Listener) error
+	ServeTLS(net.Listener, string, string) error
 }
 
 type providerServiceStopper interface {
@@ -65,9 +65,13 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 		return err
 	}
 	server := newProviderHTTPServer(addr, service.Handler())
-	logger.InfoContext(ctx, "starting github-runner-provider", "addr", addr, "tls", tlsCertFile != "")
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return errors.Join(fmt.Errorf("listen on provider address: %w", err), stopProvider(service, providerShutdownTimeout))
+	}
+	logger.InfoContext(ctx, "starting github-runner-provider", "addr", listener.Addr().String(), "tls", tlsCertFile != "")
 	serveDone := make(chan error, 1)
-	go func() { serveDone <- serveProviderHTTP(server, tlsCertFile, tlsKeyFile) }()
+	go func() { serveDone <- serveProviderHTTP(server, listener, tlsCertFile, tlsKeyFile) }()
 	select {
 	case serveErr := <-serveDone:
 		return errors.Join(normalizeProviderServeError(serveErr), stopProvider(service, providerShutdownTimeout))
@@ -101,11 +105,12 @@ func providerTLSFilesFromEnvironment() (string, string, error) {
 	return certFile, keyFile, nil
 }
 
-func serveProviderHTTP(server providerHTTPServer, certFile, keyFile string) error {
+func serveProviderHTTP(server providerHTTPServer, listener net.Listener, certFile, keyFile string) error {
+	defer func() { _ = listener.Close() }()
 	if certFile == "" {
-		return server.ListenAndServe()
+		return server.Serve(listener)
 	}
-	return server.ListenAndServeTLS(certFile, keyFile)
+	return server.ServeTLS(listener, certFile, keyFile)
 }
 
 func waitForProviderServeDone(serveDone <-chan error, timeout time.Duration) error {

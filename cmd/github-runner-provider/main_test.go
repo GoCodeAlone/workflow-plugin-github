@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,17 +42,30 @@ type recordingProviderHTTPServer struct {
 	tlsCalls   int
 	certFile   string
 	keyFile    string
+	address    string
 }
 
-func (s *recordingProviderHTTPServer) ListenAndServe() error {
+type closeTrackingListener struct {
+	net.Listener
+	closed bool
+}
+
+func (l *closeTrackingListener) Close() error {
+	l.closed = true
+	return l.Listener.Close()
+}
+
+func (s *recordingProviderHTTPServer) Serve(listener net.Listener) error {
 	s.plainCalls++
+	s.address = listener.Addr().String()
 	return http.ErrServerClosed
 }
 
-func (s *recordingProviderHTTPServer) ListenAndServeTLS(certFile, keyFile string) error {
+func (s *recordingProviderHTTPServer) ServeTLS(listener net.Listener, certFile, keyFile string) error {
 	s.tlsCalls++
 	s.certFile = certFile
 	s.keyFile = keyFile
+	s.address = listener.Addr().String()
 	return http.ErrServerClosed
 }
 
@@ -137,18 +151,30 @@ func TestProviderTransportRequiresTLSOutsideLiteralLoopback(t *testing.T) {
 
 func TestServeProviderHTTPUsesConfiguredTransport(t *testing.T) {
 	plain := &recordingProviderHTTPServer{}
-	if err := serveProviderHTTP(plain, "", ""); !errors.Is(err, http.ErrServerClosed) {
+	plainSocket, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("plain listener: %v", err)
+	}
+	plainListener := &closeTrackingListener{Listener: plainSocket}
+	t.Cleanup(func() { _ = plainListener.Close() })
+	if err := serveProviderHTTP(plain, plainListener, "", ""); !errors.Is(err, http.ErrServerClosed) {
 		t.Fatalf("plain serve: %v", err)
 	}
-	if plain.plainCalls != 1 || plain.tlsCalls != 0 {
+	if plain.plainCalls != 1 || plain.tlsCalls != 0 || plain.address != plainListener.Addr().String() || !plainListener.closed {
 		t.Fatalf("plain calls = %+v", plain)
 	}
 
 	tlsServer := &recordingProviderHTTPServer{}
-	if err := serveProviderHTTP(tlsServer, "/tls/provider.crt", "/tls/provider.key"); !errors.Is(err, http.ErrServerClosed) {
+	tlsSocket, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("TLS listener: %v", err)
+	}
+	tlsListener := &closeTrackingListener{Listener: tlsSocket}
+	t.Cleanup(func() { _ = tlsListener.Close() })
+	if err := serveProviderHTTP(tlsServer, tlsListener, "/tls/provider.crt", "/tls/provider.key"); !errors.Is(err, http.ErrServerClosed) {
 		t.Fatalf("TLS serve: %v", err)
 	}
-	if tlsServer.plainCalls != 0 || tlsServer.tlsCalls != 1 || tlsServer.certFile != "/tls/provider.crt" || tlsServer.keyFile != "/tls/provider.key" {
+	if tlsServer.plainCalls != 0 || tlsServer.tlsCalls != 1 || tlsServer.certFile != "/tls/provider.crt" || tlsServer.keyFile != "/tls/provider.key" || tlsServer.address != tlsListener.Addr().String() || !tlsListener.closed {
 		t.Fatalf("TLS calls = %+v", tlsServer)
 	}
 }

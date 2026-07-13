@@ -12,13 +12,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -2927,15 +2927,6 @@ func TestT915ProviderCommandAndRunnerClientCompleteTLSHealthRoundTrip(t *testing
 		t.Fatalf("write provider key: %v", err)
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("reserve provider address: %v", err)
-	}
-	providerAddress := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatalf("release provider address: %v", err)
-	}
-
 	providerBinary := filepath.Join(t.TempDir(), "github-runner-provider")
 	build := exec.Command("go", "build", "-o", providerBinary, "../github-runner-provider")
 	if output, err := build.CombinedOutput(); err != nil {
@@ -2946,7 +2937,7 @@ func TestT915ProviderCommandAndRunnerClientCompleteTLSHealthRoundTrip(t *testing
 	if err != nil {
 		t.Fatalf("open provider log: %v", err)
 	}
-	provider := exec.Command(providerBinary, providerAddress)
+	provider := exec.Command(providerBinary, "127.0.0.1:0")
 	provider.Stdout = providerLog
 	provider.Stderr = providerLog
 	provider.Env = append(os.Environ(),
@@ -2970,6 +2961,23 @@ func TestT915ProviderCommandAndRunnerClientCompleteTLSHealthRoundTrip(t *testing
 		}
 		_ = providerLog.Close()
 	})
+
+	providerAddress := ""
+	addressPattern := regexp.MustCompile(`\baddr=([^ ]+)`)
+	for attempt := 0; attempt < 50; attempt++ {
+		output, _ := os.ReadFile(providerLogPath)
+		match := addressPattern.FindSubmatch(output)
+		if len(match) == 2 && string(match[1]) != "127.0.0.1:0" {
+			providerAddress = string(match[1])
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if providerAddress == "" {
+		_ = providerLog.Close()
+		output, _ := os.ReadFile(providerLogPath)
+		t.Fatalf("provider did not report its bound address\n%s", output)
+	}
 
 	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_URL", "https://"+providerAddress)
 	t.Setenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN", "test-provider-token")
