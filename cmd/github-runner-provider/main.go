@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -45,6 +46,39 @@ func main() {
 }
 
 func run(ctx context.Context, logger *slog.Logger, args []string) error {
+	handled, err := dispatchProviderCommand(ctx, logger, args, os.Stdout)
+	if handled {
+		return err
+	}
+	return runProviderService(ctx, logger, args)
+}
+
+func dispatchProviderCommand(ctx context.Context, logger *slog.Logger, args []string, stdout io.Writer) (bool, error) {
+	if len(args) == 0 {
+		return false, nil
+	}
+	switch args[0] {
+	case "version", "--version":
+		if len(args) != 1 {
+			return true, errors.New("version does not accept arguments")
+		}
+		_, err := fmt.Fprintln(stdout, internal.Version)
+		return true, err
+	case "probe":
+		return true, runProviderProbe(ctx, args[1:], stdout)
+	case "retained":
+		return true, runRetainedProviderCommand(ctx, logger, args[1:], stdout)
+	default:
+		if len(args) == 1 {
+			if _, _, err := net.SplitHostPort(args[0]); err == nil {
+				return false, nil
+			}
+		}
+		return true, fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func runProviderService(ctx context.Context, logger *slog.Logger, args []string) error {
 	addr := "127.0.0.1:8090"
 	if len(args) > 0 {
 		addr = args[0]

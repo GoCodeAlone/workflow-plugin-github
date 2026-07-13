@@ -29,6 +29,17 @@ func TestReleaseArchiveIncludesGitHubRunnerProvider(t *testing.T) {
 	}
 }
 
+func TestGitHubRunnerProviderReleaseBuildInjectsVersion(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	build := listItemWithID(topLevelSection(string(data), "builds:"), "github-runner-provider")
+	if !strings.Contains(build, "-X github.com/GoCodeAlone/workflow-plugin-github/internal.Version={{.Version}}") {
+		t.Fatalf("github-runner-provider release build must inject internal.Version:\n%s", build)
+	}
+}
+
 func TestReleaseArchiveIncludesGitHubActionsRunnerJob(t *testing.T) {
 	data, err := os.ReadFile(".goreleaser.yaml")
 	if err != nil {

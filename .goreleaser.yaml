@@ -42,6 +42,8 @@ builds:
     goarch:
       - amd64
       - arm64
+    ldflags:
+      - -s -w -X github.com/GoCodeAlone/workflow-plugin-github/internal.Version={{.Version}}
   - id: github-actions-runner-job
     main: ./cmd/github-actions-runner-job
     binary: github-actions-runner-job
