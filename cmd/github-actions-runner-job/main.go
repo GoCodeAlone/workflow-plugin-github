@@ -6,6 +6,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -389,9 +392,13 @@ func newSidecarClientFromEnv() (*providerSidecarClient, error) {
 		return nil, fmt.Errorf("provider URL must be absolute and must not contain credentials, query, or fragment")
 	}
 	host := parsedURL.Hostname()
-	loopbackHTTP := parsedURL.Scheme == "http" && (strings.EqualFold(host, "localhost") || net.ParseIP(host).IsLoopback())
+	loopbackHTTP := parsedURL.Scheme == "http" && net.ParseIP(host).IsLoopback()
 	if parsedURL.Scheme != "https" && !loopbackHTTP {
 		return nil, fmt.Errorf("provider URL must use HTTPS except for a loopback HTTP endpoint")
+	}
+	httpClient, err := providerSidecarHTTPClient(parsedURL)
+	if err != nil {
+		return nil, err
 	}
 	token := strings.TrimSpace(os.Getenv("COMPUTE_GITHUB_RUNNER_PROVIDER_TOKEN"))
 	if token == "" {
@@ -406,8 +413,50 @@ func newSidecarClientFromEnv() (*providerSidecarClient, error) {
 	return &providerSidecarClient{
 		baseURL: strings.TrimRight(parsedURL.String(), "/"),
 		token:   token,
-		http:    &http.Client{Timeout: 30 * time.Second},
+		http:    httpClient,
 	}, nil
+}
+
+func providerSidecarHTTPClient(parsedURL *url.URL) (*http.Client, error) {
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("provider sidecar redirects are forbidden")
+		},
+	}
+	encodedCA := strings.TrimSpace(os.Getenv("COMPUTE_GITHUB_RUNNER_PROVIDER_CA_CERT_B64"))
+	if encodedCA == "" {
+		return client, nil
+	}
+	if parsedURL.Scheme != "https" {
+		return nil, errors.New("provider CA certificate requires an HTTPS provider URL")
+	}
+	caPEM, err := base64.StdEncoding.DecodeString(encodedCA)
+	if err != nil {
+		return nil, fmt.Errorf("decode provider CA certificate: %w", err)
+	}
+	roots, err := providerCertificatePool(caPEM, x509.SystemCertPool)
+	if err != nil {
+		return nil, err
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    roots,
+	}
+	client.Transport = transport
+	return client, nil
+}
+
+func providerCertificatePool(caPEM []byte, loadSystemRoots func() (*x509.CertPool, error)) (*x509.CertPool, error) {
+	roots, err := loadSystemRoots()
+	if err != nil || roots == nil {
+		roots = x509.NewCertPool()
+	}
+	if !roots.AppendCertsFromPEM(caPEM) {
+		return nil, errors.New("provider CA certificate must contain at least one PEM certificate")
+	}
+	return roots, nil
 }
 
 func (c *providerSidecarClient) orgJITConfig(ctx context.Context, req internal.EphemeralRunnerJobRequest, spec internal.EphemeralRunnerJobSpec) (internal.GitHubRunnerJITRegistration, error) {

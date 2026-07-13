@@ -4,9 +4,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,6 +23,11 @@ const providerShutdownTimeout = 10 * time.Second
 type providerHTTPShutdowner interface {
 	Shutdown(context.Context) error
 	Close() error
+}
+
+type providerHTTPServer interface {
+	Serve(net.Listener) error
+	ServeTLS(net.Listener, string, string) error
 }
 
 type providerServiceStopper interface {
@@ -46,14 +53,25 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 	if err != nil {
 		return err
 	}
+	tlsCertFile, tlsKeyFile, err := providerTLSFilesFromEnvironment()
+	if err != nil {
+		return err
+	}
+	if err := validateProviderTransport(addr, tlsCertFile, tlsKeyFile); err != nil {
+		return err
+	}
 	service, err := internal.NewGitHubRunnerProviderHTTPService("github-runner-provider", config)
 	if err != nil {
 		return err
 	}
 	server := newProviderHTTPServer(addr, service.Handler())
-	logger.InfoContext(ctx, "starting github-runner-provider", "addr", addr)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return errors.Join(fmt.Errorf("listen on provider address: %w", err), stopProvider(service, providerShutdownTimeout))
+	}
+	logger.InfoContext(ctx, "starting github-runner-provider", "addr", listener.Addr().String(), "tls", tlsCertFile != "")
 	serveDone := make(chan error, 1)
-	go func() { serveDone <- server.ListenAndServe() }()
+	go func() { serveDone <- serveProviderHTTP(server, listener, tlsCertFile, tlsKeyFile) }()
 	select {
 	case serveErr := <-serveDone:
 		return errors.Join(normalizeProviderServeError(serveErr), stopProvider(service, providerShutdownTimeout))
@@ -62,6 +80,37 @@ func run(ctx context.Context, logger *slog.Logger, args []string) error {
 		serveErr := waitForProviderServeDone(serveDone, providerShutdownTimeout)
 		return errors.Join(shutdownErr, serveErr)
 	}
+}
+
+func validateProviderTransport(addr, certFile, keyFile string) error {
+	if certFile != "" && keyFile != "" {
+		return nil
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("provider listen address must be host:port: %w", err)
+	}
+	if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
+		return errors.New("provider listener requires TLS outside a literal loopback address")
+	}
+	return nil
+}
+
+func providerTLSFilesFromEnvironment() (string, string, error) {
+	certFile := strings.TrimSpace(os.Getenv("GITHUB_RUNNER_PROVIDER_TLS_CERT_FILE"))
+	keyFile := strings.TrimSpace(os.Getenv("GITHUB_RUNNER_PROVIDER_TLS_KEY_FILE"))
+	if (certFile == "") != (keyFile == "") {
+		return "", "", errors.New("GITHUB_RUNNER_PROVIDER_TLS_CERT_FILE and GITHUB_RUNNER_PROVIDER_TLS_KEY_FILE must be set together")
+	}
+	return certFile, keyFile, nil
+}
+
+func serveProviderHTTP(server providerHTTPServer, listener net.Listener, certFile, keyFile string) error {
+	defer func() { _ = listener.Close() }()
+	if certFile == "" {
+		return server.Serve(listener)
+	}
+	return server.ServeTLS(listener, certFile, keyFile)
 }
 
 func waitForProviderServeDone(serveDone <-chan error, timeout time.Duration) error {
@@ -79,6 +128,7 @@ func newProviderHTTPServer(addr string, handler http.Handler) *http.Server {
 	return &http.Server{
 		Addr:              addr,
 		Handler:           handler,
+		TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
 		WriteTimeout:      35 * time.Second,
