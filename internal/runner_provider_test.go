@@ -1035,6 +1035,108 @@ func TestT44_GitHubRunnerProviderServesHealthz(t *testing.T) {
 	}
 }
 
+func TestT916GitHubRunnerProviderReadyzRequiresProviderBearer(t *testing.T) {
+	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
+		"token":          "github-token",
+		"provider_token": "provider-token",
+		"repositories":   []any{"example/repository"},
+	}, &fakeRunnerClient{})
+	if err != nil {
+		t.Fatalf("module: %v", err)
+	}
+	server := httptest.NewServer(module.HTTPHandler())
+	defer server.Close()
+
+	unauthorizedCases := []struct {
+		name          string
+		authorization []string
+	}{
+		{name: "missing"},
+		{name: "bare token", authorization: []string{"provider-token"}},
+		{name: "bare bearer", authorization: []string{"Bearer"}},
+		{name: "empty bearer", authorization: []string{"Bearer "}},
+		{name: "basic", authorization: []string{"Basic provider-token"}},
+		{name: "lowercase scheme", authorization: []string{"bearer provider-token"}},
+		{name: "extra whitespace", authorization: []string{"Bearer  provider-token"}},
+		{name: "wrong token", authorization: []string{"Bearer submitted-wrong-token"}},
+		{name: "duplicate", authorization: []string{"Bearer provider-token", "Bearer submitted-wrong-token"}},
+	}
+	for _, tc := range unauthorizedCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, requestErr := http.NewRequest(http.MethodGet, server.URL+"/readyz", nil)
+			if requestErr != nil {
+				t.Fatalf("request: %v", requestErr)
+			}
+			for _, authorization := range tc.authorization {
+				req.Header.Add("Authorization", authorization)
+			}
+			resp, requestErr := server.Client().Do(req)
+			if requestErr != nil {
+				t.Fatalf("readiness request: %v", requestErr)
+			}
+			body, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if readErr != nil {
+				t.Fatalf("read unauthorized response: %v", readErr)
+			}
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("readiness status: got %d want %d body=%s", resp.StatusCode, http.StatusUnauthorized, body)
+			}
+			if string(body) != "{\"error\":\"provider token is invalid\"}\n" {
+				t.Fatalf("unauthorized body: got %q", body)
+			}
+			for _, token := range []string{"provider-token", "submitted-wrong-token"} {
+				if strings.Contains(string(body), token) {
+					t.Fatalf("unauthorized response exposed token %q", token)
+				}
+			}
+		})
+	}
+
+	directReq := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	directReq.Header["Authorization"] = []string{"Bearer provider-token "}
+	directResp := httptest.NewRecorder()
+	module.HTTPHandler().ServeHTTP(directResp, directReq)
+	if directResp.Code != http.StatusUnauthorized {
+		t.Fatalf("direct trailing-whitespace status: got %d want %d", directResp.Code, http.StatusUnauthorized)
+	}
+
+	headReq, err := http.NewRequest(http.MethodHead, server.URL+"/readyz", nil)
+	if err != nil {
+		t.Fatalf("HEAD request: %v", err)
+	}
+	headReq.Header.Set("Authorization", "Bearer provider-token")
+	headResp, err := server.Client().Do(headReq)
+	if err != nil {
+		t.Fatalf("HEAD readiness request: %v", err)
+	}
+	_ = headResp.Body.Close()
+	if headResp.StatusCode != http.StatusMethodNotAllowed || headResp.Header.Get("Allow") != http.MethodGet {
+		t.Fatalf("HEAD readiness response: status=%d allow=%q", headResp.StatusCode, headResp.Header.Get("Allow"))
+	}
+
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/readyz", nil)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer provider-token")
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatalf("authenticated readiness request: %v", err)
+	}
+	t.Cleanup(func() { _ = resp.Body.Close() })
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("authenticated readiness status: got %d want %d", resp.StatusCode, http.StatusOK)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read readiness response: %v", err)
+	}
+	if string(body) != "{\"status\":\"ok\"}\n" {
+		t.Fatalf("readiness response: got %q", body)
+	}
+}
+
 func TestT916GitHubRunnerProviderHTTPRejectsConcatenatedJSON(t *testing.T) {
 	module, err := newGitHubRunnerProviderModule("provider", map[string]any{
 		"token":          "github-token",
