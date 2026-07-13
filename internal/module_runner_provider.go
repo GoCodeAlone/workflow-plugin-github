@@ -1540,6 +1540,7 @@ func validateEphemeralRunnerJobArgs(args map[string]any) error {
 func (m *githubRunnerProviderModule) HTTPHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", m.handleHealth)
+	mux.HandleFunc("GET /readyz", m.handleReadiness)
 	mux.HandleFunc("POST /v1/actions/runners/registration-token", m.handleRegistrationToken)
 	mux.HandleFunc("DELETE /v1/actions/runners/{runner_id}", m.handleRemoveRunner)
 	mux.HandleFunc("POST /v1/actions/orgs/{organization}/runners/registration-token", m.handleOrgRegistrationToken)
@@ -1556,6 +1557,19 @@ func (m *githubRunnerProviderModule) HTTPHandler() http.Handler {
 }
 
 func (m *githubRunnerProviderModule) handleHealth(w http.ResponseWriter, _ *http.Request) {
+	writeProviderResponse(w, http.StatusOK, map[string]any{"status": "ok"})
+}
+
+func (m *githubRunnerProviderModule) handleReadiness(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", http.MethodGet)
+		writeProviderError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	if err := m.authorizeProvider(map[string]any{"provider_token": bearerToken(r)}); err != nil {
+		writeProviderError(w, providerErrorStatus(err), err)
+		return
+	}
 	writeProviderResponse(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -1845,9 +1859,16 @@ func parseOptionalRFC3339Query(value, name string) (time.Time, error) {
 }
 
 func bearerToken(r *http.Request) string {
-	value := r.Header.Get("Authorization")
+	values := r.Header.Values("Authorization")
+	if len(values) != 1 {
+		return ""
+	}
+	value := values[0]
+	if strings.TrimSpace(value) != value {
+		return ""
+	}
 	token, ok := strings.CutPrefix(value, "Bearer ")
-	if !ok {
+	if !ok || token == "" || strings.ContainsAny(token, " \t\r\n") {
 		return ""
 	}
 	return token
