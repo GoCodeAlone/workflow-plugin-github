@@ -64,12 +64,24 @@ The installer uses `compute-agent supervisor-maintenance` and the local agent
 status file; it never reads STG leases and receives no STG API token.
 
 The path unit watches the exact supervisor current-package marker. A marker
-change runs `retained refresh`. Refresh uses `compute-agent supervisor-update
-verify` to cryptographically bind worker, directive, artifact, path, and digest
-before copying bytes. It builds a digest-unique scratch image, starts a
-candidate with cloned provider state, runs authenticated readiness plus GitHub
-preflight, and only then replaces durable active state and restarts the stable
-provider. Candidate failure leaves the prior service and active state intact.
+change runs `retained refresh`. A bounded user timer runs the same idempotent
+refresh at boot and periodically, so a coalesced path event, disabled user
+session, or server/agent restart still catches up. Refresh is serialized by a
+user-owned OS lock and uses `compute-agent supervisor-update verify` to
+cryptographically bind worker, directive, artifact, path, and digest before
+copying bytes.
+
+Refresh writes a crash-durable transaction journal before mutation, builds a
+digest-unique scratch image, starts a candidate with cloned provider state, and
+runs authenticated readiness plus GitHub preflight from a separate probe
+container on the same `--network bridge` used by provider workloads. This proves
+container-name DNS and TLS from the workload side of the boundary, not merely
+from inside the provider container. Only then does refresh fsync and atomically
+replace durable active state, restart the stable provider, verify it again from
+the separate probe container, mark the journal committed, and retain the prior
+active image/state as rollback material. Candidate or stable activation failure
+restores the prior active record and service. Startup recovery finishes or
+rolls back an interrupted journal before any new refresh.
 
 The agent receives only provider URL, provider API token, and CA certificate.
 The GitHub token remains in the provider container environment and is never
@@ -100,6 +112,9 @@ forwarded to the ephemeral runner-job container.
   Commands and evidence never include credential values.
 - Candidate provider state is a regular-file-only clone. Candidate failure or
   interrupted activation preserves prior active state and service.
+- Refresh uses a single-owner lock and crash-durable prepare/activate/commit
+  journal. The current and immediately previous immutable image IDs are retained;
+  cleanup never removes rollback material referenced by active recovery state.
 - Rootless Podman runs with a read-only root, dropped capabilities, no-new-
   privileges, explicit state/TLS mounts, and no socket mount. Ephemeral workload
   containers receive only the provider API credential.
@@ -117,12 +132,16 @@ forwarded to the ephemeral runner-job container.
 - Initial install needs a self-hosted workflow on the retained Linux host. Once
   installed, package refreshes are triggered by STG campaigns and local marker
   observation, not GitHub workflows.
+- Credential rotation is an idempotent reinstall operation. It rewrites secret
+  files under maintenance, re-preflights provider/agent wiring, and preserves
+  worker identity and provider journal state.
 
 ## Multi-Component Validation
 
 1. Unit tests use fake command execution and filesystem roots to prove strict
    config, transaction ordering, secret exclusion, candidate failure rollback,
-   marker-triggered unit content, status, and uninstall behavior.
+   crash-journal recovery, path+timer unit content, status, and uninstall
+   behavior.
 2. Build Linux amd64/arm64 provider binaries and run `version` without provider
    credentials.
 3. Launch a real local provider process with TLS and an HTTP fake for the GitHub
@@ -130,7 +149,9 @@ forwarded to the ephemeral runner-job container.
 4. Release the plugin and publish an executable, probe-capable provider package
    through STG.
 5. Run one retained Linux install workflow, then publish a second package
-   campaign and prove systemd refresh occurs without another install workflow.
+   campaign and prove path/timer refresh plus reconnect occurs without another
+   install workflow. Restart the user service manager or retained agent between
+   promotion and observation to prove catch-up after a missed immediate event.
 6. Dispatch the real ephemeral GitHub runner workload from STG. Validate worker,
    proof, logs, and artifact refs through STG; GitHub output alone is not proof.
 7. Exercise the separate manual uninstall workflow only after update/reconnect
@@ -141,8 +162,8 @@ forwarded to the ephemeral runner-job container.
 | id | assumption | failure response |
 |---|---|---|
 | A1 | Retained Linux runs user systemd with lingering and rootless Podman. | Install preflight fails before mutation and emits a redacted diagnostic. |
-| A2 | Podman default bridge provides name resolution between provider and workload containers. | Runtime proof fails before dogfood rollout; configure an explicit rootless network in a fix-forward release. |
-| A3 | Current-package marker replacement is observable by a systemd path unit. | Runtime update proof must show the path unit invocation; otherwise replace it with a bounded user timer watching digest state. |
+| A2 | Podman `--network bridge` provides name resolution between provider and workload-shaped containers. | Every candidate/stable activation runs the real probe from a separate bridge container and fails closed before rollout if name resolution or TLS fails. |
+| A3 | Current-package marker replacement is observable by a systemd path unit. | A bounded boot/periodic timer reconciles current versus active digest even when path observation is missed. |
 | A4 | Existing provider state consists only of regular files/directories. | Refresh rejects unsupported entries and preserves the active service. |
 | A5 | Provider launcher schema remains backward-compatible across plugin updates. | Version the lifecycle config/state and fail closed before activation. |
 
@@ -150,9 +171,9 @@ forwarded to the ephemeral runner-job container.
 
 1. A generic managed-sidecar framework may eventually be cleaner. It is not
    justified until another provider demonstrates identical lifecycle needs.
-2. A path unit can miss or coalesce events. Refresh is idempotent and status
-   compares active/current digests; STG rollout proof must show actual version
-   transition, not merely an active unit.
+2. A path unit can miss or coalesce events. The timer is required, refresh is
+   idempotent, and status compares active/current digests; STG rollout proof must
+   show actual version transition, not merely an active unit.
 3. Same-user host compromise can read provider files despite containerization.
    The security boundary is untrusted workload versus trusted retained agent;
    hardware-backed host isolation is explicitly outside this slimming slice.
@@ -160,10 +181,11 @@ forwarded to the ephemeral runner-job container.
 ## Rollback
 
 - Candidate failure retains the previous active image/state and running service.
+  Startup recovery consumes the fsynced transaction journal after interruption;
+  the current and prior immutable image IDs are never removed while referenced.
 - A bad accepted release can be rolled back by a signed STG campaign to a prior
   plugin version; the same refresh path preflights it before activation.
 - `retained uninstall` removes provider units and the agent drop-in while
   preserving worker identity and, by default, provider state.
 - The dogfood workflow can return to the existing non-provider runner labels;
   no production deployment is part of this design.
-
