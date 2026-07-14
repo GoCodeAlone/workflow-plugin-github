@@ -50,6 +50,22 @@ func TestAtomicWriteJSONUsesRestrictiveRegularFile(t *testing.T) {
 	}
 }
 
+func TestDurableDirectoryCreationSyncsEachNewParentEntry(t *testing.T) {
+	base := t.TempDir()
+	target := filepath.Join(base, "one", "two")
+	var synced []string
+	if err := mkdirAllDurableWithSync(target, 0o700, func(path string) error {
+		synced = append(synced, filepath.Clean(path))
+		return nil
+	}); err != nil {
+		t.Fatalf("create durable directory: %v", err)
+	}
+	want := []string{base, filepath.Join(base, "one")}
+	if strings.Join(synced, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("directory sync order = %v want %v", synced, want)
+	}
+}
+
 func TestReadStrictJSONFileRejectsUnknownAndOversizedData(t *testing.T) {
 	dir := t.TempDir()
 	unknown := filepath.Join(dir, "unknown.json")
@@ -114,6 +130,70 @@ func TestValidateUserPathRejectsSymlinkedAncestorAndOutsideHome(t *testing.T) {
 	}
 	if err := ValidateUserPath(home, filepath.Join(filepath.Dir(home), "outside"), false); err == nil || !strings.Contains(err.Error(), "home") {
 		t.Fatalf("outside-home err = %v", err)
+	}
+}
+
+func TestValidateUserPathRejectsSymlinkedHomeAndWritableAuthority(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix directory authority semantics")
+	}
+	root := t.TempDir()
+	realHome := filepath.Join(root, "real-home")
+	if err := os.Mkdir(realHome, 0o700); err != nil {
+		t.Fatalf("mkdir real home: %v", err)
+	}
+	linkedHome := filepath.Join(root, "linked-home")
+	if err := os.Symlink(realHome, linkedHome); err != nil {
+		t.Fatalf("symlink home: %v", err)
+	}
+	if err := ValidateUserPath(linkedHome, filepath.Join(linkedHome, "state.json"), false); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("symlinked home err = %v", err)
+	}
+
+	secureHome := filepath.Join(root, "secure-home")
+	if err := os.Mkdir(secureHome, 0o700); err != nil {
+		t.Fatalf("mkdir secure home: %v", err)
+	}
+	if err := os.Chmod(secureHome, 0o777); err != nil {
+		t.Fatalf("make home writable: %v", err)
+	}
+	if err := ValidateUserPath(secureHome, filepath.Join(secureHome, "state.json"), false); err == nil || !strings.Contains(err.Error(), "writable") {
+		t.Fatalf("writable home err = %v", err)
+	}
+	if err := os.Chmod(secureHome, 0o700); err != nil {
+		t.Fatalf("restore home mode: %v", err)
+	}
+	writable := filepath.Join(secureHome, "writable")
+	if err := os.Mkdir(writable, 0o700); err != nil {
+		t.Fatalf("mkdir writable ancestor: %v", err)
+	}
+	if err := os.Chmod(writable, 0o777); err != nil {
+		t.Fatalf("make ancestor writable: %v", err)
+	}
+	if err := ValidateUserPath(secureHome, filepath.Join(writable, "state.json"), false); err == nil || !strings.Contains(err.Error(), "writable") {
+		t.Fatalf("writable ancestor err = %v", err)
+	}
+}
+
+func TestDurableDirectoryCreationRejectsWritableExistingAncestor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose Unix directory authority semantics")
+	}
+	base := t.TempDir()
+	authority := filepath.Join(base, "authority")
+	if err := os.Mkdir(authority, 0o700); err != nil {
+		t.Fatalf("mkdir authority: %v", err)
+	}
+	if err := os.Chmod(authority, 0o777); err != nil {
+		t.Fatalf("make authority writable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(authority, 0o700) })
+	target := filepath.Join(authority, "managed", "state")
+	if err := mkdirAllDurableWithSync(target, 0o700, func(string) error { return nil }); err == nil || !strings.Contains(err.Error(), "writable") {
+		t.Fatalf("writable durable ancestor err = %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(authority, "managed")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("durable creation mutated insecure authority: %v", err)
 	}
 }
 
@@ -183,7 +263,7 @@ func TestInstallLockIsExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first lock: %v", err)
 	}
-	defer first.Release()
+	defer func() { _ = first.Release() }()
 	if _, err := AcquireInstallLock(path); err == nil || !errors.Is(err, ErrInstallLocked) {
 		t.Fatalf("second lock err = %v", err)
 	}
@@ -227,7 +307,7 @@ func TestLifecycleLockRemainsExclusiveWhileInstallRootIsPurged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire lifecycle lock: %v", err)
 	}
-	defer lock.Release()
+	defer func() { _ = lock.Release() }()
 	if err := os.RemoveAll(paths.Root); err != nil {
 		t.Fatalf("purge install root: %v", err)
 	}

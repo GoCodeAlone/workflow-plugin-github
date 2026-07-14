@@ -17,7 +17,9 @@ import (
 	"math/big"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -70,7 +72,8 @@ func RenderSystemdUnits(config Config, paths LifecyclePaths) (SystemdUnits, erro
 			"[Service]\n" +
 			"Type=oneshot\n" +
 			"ExecStart=" + systemdQuote(paths.Launcher) + " retained refresh -config " + systemdQuote(paths.ConfigFile) + "\n" +
-			"TimeoutStartSec=15min\n",
+			"TimeoutStartSec=" + systemdTimeout(retainedRefreshServiceStartTimeout) + "\n" +
+			"TimeoutStopSec=" + systemdTimeout(retainedRefreshServiceStopTimeout) + "\n",
 		RefreshPath: "[Unit]\n" +
 			"Description=Watch signed GitHub runner provider package marker\n\n" +
 			"[Path]\n" +
@@ -89,6 +92,11 @@ func RenderSystemdUnits(config Config, paths LifecyclePaths) (SystemdUnits, erro
 			"WantedBy=timers.target\n",
 		AgentDropIn: "[Service]\nEnvironmentFile=" + systemdPathValue(paths.AgentEnv) + "\n",
 	}, nil
+}
+
+func systemdTimeout(duration time.Duration) string {
+	seconds := (duration + time.Second - 1) / time.Second
+	return strconv.FormatInt(int64(seconds), 10) + "s"
 }
 
 func systemdQuote(value string) string {
@@ -120,12 +128,15 @@ type Credentials struct {
 	ProviderToken string
 }
 
+const maxCredentialBytes = 32 << 10
+
 type InstallMaterial struct {
 	ProviderEnv    []byte
 	ProbeEnv       []byte
 	AgentEnv       []byte
 	ContainersConf []byte
 	CACert         []byte
+	CAKey          []byte
 	ServerCert     []byte
 	ServerKey      []byte
 }
@@ -143,7 +154,7 @@ func GenerateInstallMaterial(config Config, credentials Credentials, random io.R
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
-	caCert, serverCert, serverKey, err := generateProviderTLS(config, random, now.UTC())
+	caCert, caKey, serverCert, serverKey, err := generateProviderTLS(config, random, now.UTC())
 	if err != nil {
 		return InstallMaterial{}, err
 	}
@@ -180,6 +191,7 @@ func GenerateInstallMaterial(config Config, credentials Credentials, random io.R
 		AgentEnv:       agentEnvironment,
 		ContainersConf: []byte("[network]\ndefault_network = \"" + config.ContainerNetwork + "\"\n"),
 		CACert:         caCert,
+		CAKey:          caKey,
 		ServerCert:     serverCert,
 		ServerKey:      serverKey,
 	}, nil
@@ -195,6 +207,7 @@ func WriteInstallMaterial(paths LifecyclePaths, material InstallMaterial) error 
 		{path: paths.AgentEnv, data: material.AgentEnv},
 		{path: paths.ContainersConf, data: material.ContainersConf},
 		{path: paths.CAFile, data: material.CACert},
+		{path: paths.CAKey, data: material.CAKey},
 		{path: paths.ServerCert, data: material.ServerCert},
 		{path: paths.ServerKey, data: material.ServerKey},
 	} {
@@ -214,7 +227,7 @@ func renderPodmanEnvironment(values []environmentValue) ([]byte, error) {
 	var builder strings.Builder
 	for _, value := range values {
 		if !safeEnvironmentKey(value.Name) || value.Value == "" || strings.ContainsAny(value.Value, "\r\n\x00") {
-			return nil, errors.New("Podman environment contains an invalid value")
+			return nil, errors.New("podman environment contains an invalid value")
 		}
 		builder.WriteString(value.Name)
 		builder.WriteByte('=')
@@ -239,20 +252,20 @@ func renderSystemdEnvironment(values []environmentValue) ([]byte, error) {
 }
 
 func validateCredential(value string) error {
-	if value == "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n\x00") {
+	if value == "" || len(value) > maxCredentialBytes || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n\x00") {
 		return errors.New("invalid credential")
 	}
 	return nil
 }
 
-func generateProviderTLS(config Config, random io.Reader, now time.Time) ([]byte, []byte, []byte, error) {
+func generateProviderTLS(config Config, random io.Reader, now time.Time) ([]byte, []byte, []byte, []byte, error) {
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), random)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("generate provider CA key: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("generate provider CA key: %w", err)
 	}
 	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), random)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("generate provider server key: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("generate provider server key: %w", err)
 	}
 	serial := big.NewInt(now.UnixNano())
 	if serial.Sign() <= 0 {
@@ -269,7 +282,7 @@ func generateProviderTLS(config Config, random io.Reader, now time.Time) ([]byte
 	}
 	caDER, err := x509.CreateCertificate(random, caTemplate, caTemplate, &caKey.PublicKey, caKey)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create provider CA certificate: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("create provider CA certificate: %w", err)
 	}
 	serverTemplate := &x509.Certificate{
 		SerialNumber: new(big.Int).Add(serial, big.NewInt(1)),
@@ -283,15 +296,167 @@ func generateProviderTLS(config Config, random io.Reader, now time.Time) ([]byte
 	}
 	serverDER, err := x509.CreateCertificate(random, serverTemplate, caTemplate, &serverKey.PublicKey, caKey)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create provider server certificate: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("create provider server certificate: %w", err)
+	}
+	caKeyDER, err := x509.MarshalECPrivateKey(caKey)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("marshal provider CA key: %w", err)
 	}
 	serverKeyDER, err := x509.MarshalECPrivateKey(serverKey)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("marshal provider server key: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("marshal provider server key: %w", err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: caKeyDER}),
 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: serverDER}),
 		pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: serverKeyDER}), nil
+}
+
+const providerServerCertificateRenewalWindow = 30 * 24 * time.Hour
+
+func renewProviderServerCertificate(config Config, paths LifecyclePaths, random io.Reader, now time.Time) (bool, error) {
+	caCertificate, caKey, serverCertificate, serverKey, err := readProviderTLSAuthority(config, paths, now)
+	if err != nil {
+		return false, err
+	}
+	if serverCertificate.NotAfter.After(now.Add(providerServerCertificateRenewalWindow)) {
+		return false, nil
+	}
+	if random == nil {
+		random = rand.Reader
+	}
+	notAfter := now.AddDate(1, 0, 0)
+	if caLimit := caCertificate.NotAfter.Add(-time.Hour); notAfter.After(caLimit) {
+		notAfter = caLimit
+	}
+	if !notAfter.After(now.Add(providerServerCertificateRenewalWindow)) {
+		return false, errors.New("provider CA is too close to expiry; credential reinstall is required")
+	}
+	serial := big.NewInt(now.UnixNano())
+	if serial.Sign() <= 0 {
+		serial = big.NewInt(1)
+	}
+	template := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{CommonName: config.StableContainer},
+		NotBefore:    now.Add(-5 * time.Minute),
+		NotAfter:     notAfter,
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     []string{"localhost", config.StableContainer, config.CandidateContainer},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("::1")},
+	}
+	der, err := x509.CreateCertificate(random, template, caCertificate, &serverKey.PublicKey, caKey)
+	if err != nil {
+		return false, fmt.Errorf("renew provider server certificate: %w", err)
+	}
+	if err := atomicWriteFile(paths.ServerCert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		return false, fmt.Errorf("write renewed provider server certificate: %w", err)
+	}
+	return true, nil
+}
+
+func providerServerCertificateNeedsRenewal(config Config, paths LifecyclePaths, now time.Time) (bool, error) {
+	_, _, certificate, _, err := readProviderTLSAuthority(config, paths, now)
+	if err != nil {
+		return false, err
+	}
+	return !certificate.NotAfter.After(now.Add(providerServerCertificateRenewalWindow)), nil
+}
+
+func readProviderTLSAuthority(config Config, paths LifecyclePaths, now time.Time) (*x509.Certificate, *ecdsa.PrivateKey, *x509.Certificate, *ecdsa.PrivateKey, error) {
+	caCertificate, err := readProviderCertificate(paths.CAFile)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("read provider CA certificate: %w", err)
+	}
+	caKey, err := readProviderECKey(paths.CAKey)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("read provider CA key: %w", err)
+	}
+	serverCertificate, err := readProviderCertificate(paths.ServerCert)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("read provider server certificate: %w", err)
+	}
+	serverKey, err := readProviderECKey(paths.ServerKey)
+	if err != nil {
+		return nil, nil, nil, nil, fmt.Errorf("read provider server key: %w", err)
+	}
+	if !caCertificate.IsCA || caCertificate.NotBefore.After(now) || !caCertificate.NotAfter.After(now) || !sameECDSAPublicKey(caCertificate.PublicKey, &caKey.PublicKey) {
+		return nil, nil, nil, nil, errors.New("provider CA authority is invalid or expired")
+	}
+	if err := serverCertificate.CheckSignatureFrom(caCertificate); err != nil || !sameECDSAPublicKey(serverCertificate.PublicKey, &serverKey.PublicKey) {
+		return nil, nil, nil, nil, errors.New("provider server certificate authority or key binding is invalid")
+	}
+	if serverCertificate.NotBefore.After(now) {
+		return nil, nil, nil, nil, errors.New("provider server certificate is not currently valid")
+	}
+	for _, hostname := range []string{config.StableContainer, config.CandidateContainer} {
+		if err := serverCertificate.VerifyHostname(hostname); err != nil {
+			return nil, nil, nil, nil, errors.New("provider server certificate hostname binding is invalid")
+		}
+	}
+	return caCertificate, caKey, serverCertificate, serverKey, nil
+}
+
+func readProviderCertificate(path string) (*x509.Certificate, error) {
+	data, err := readProviderSecretPEM(path)
+	if err != nil {
+		return nil, err
+	}
+	block, rest := pem.Decode(data)
+	if block == nil || block.Type != "CERTIFICATE" || len(bytes.TrimSpace(rest)) != 0 {
+		return nil, errors.New("provider certificate PEM is invalid")
+	}
+	certificate, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, errors.New("provider certificate is invalid")
+	}
+	return certificate, nil
+}
+
+func readProviderECKey(path string) (*ecdsa.PrivateKey, error) {
+	data, err := readProviderSecretPEM(path)
+	if err != nil {
+		return nil, err
+	}
+	block, rest := pem.Decode(data)
+	if block == nil || block.Type != "EC PRIVATE KEY" || len(bytes.TrimSpace(rest)) != 0 {
+		return nil, errors.New("provider private key PEM is invalid")
+	}
+	key, err := x509.ParseECPrivateKey(block.Bytes)
+	if err != nil || key.Curve != elliptic.P256() {
+		return nil, errors.New("provider private key is invalid")
+	}
+	return key, nil
+}
+
+func readProviderSecretPEM(path string) ([]byte, error) {
+	entry, err := os.Lstat(path)
+	if err != nil || !entry.Mode().IsRegular() || entry.Mode().Perm() != 0o600 || entry.Size() <= 0 || entry.Size() > MaxStateFileBytes {
+		return nil, errors.New("provider TLS input must be a bounded owner-only regular file")
+	}
+	if err := validateOwner(entry); err != nil {
+		return nil, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	opened, err := file.Stat()
+	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(entry, opened) || opened.Size() > MaxStateFileBytes {
+		return nil, errors.New("provider TLS input changed during open")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, MaxStateFileBytes+1))
+	if err != nil || len(data) > MaxStateFileBytes {
+		return nil, errors.New("read provider TLS input")
+	}
+	return data, nil
+}
+
+func sameECDSAPublicKey(value any, expected *ecdsa.PublicKey) bool {
+	actual, ok := value.(*ecdsa.PublicKey)
+	return ok && actual.Equal(expected)
 }
 
 func atomicWriteFile(path string, data []byte, mode os.FileMode) (returnErr error) {
@@ -302,7 +467,7 @@ func atomicWriteFile(path string, data []byte, mode os.FileMode) (returnErr erro
 		return errors.New("generated file mode must be 0600 or 0700")
 	}
 	directory := filepath.Dir(path)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
+	if err := mkdirAllDurable(directory, 0o700); err != nil {
 		return err
 	}
 	if err := rejectWritableDestination(path); err != nil {
@@ -370,6 +535,7 @@ const (
 type Installer struct {
 	Runner         CommandRunner
 	ExecutablePath func() (string, error)
+	UserID         func() (string, error)
 	Random         io.Reader
 	Now            func() time.Time
 	Sleep          func(context.Context, time.Duration) error
@@ -587,23 +753,12 @@ func writeInstallTransactionPhase(paths LifecyclePaths, journal *installTransact
 	return nil
 }
 
-func writeInstallTransactionActivation(paths LifecyclePaths, journal *installTransactionJournal, activation systemdActivation, now time.Time) error {
-	next := *journal
-	next.Activation = activation
-	next.UpdatedAt = now
-	if err := writeInstallTransactionJournal(paths, next); err != nil {
-		return err
-	}
-	*journal = next
-	return nil
-}
-
 func (installer Installer) recoverInstallTransaction(ctx context.Context, config Config, paths LifecyclePaths, refresher Refresher) error {
 	journal, found, err := readInstallTransactionJournal(paths)
 	if err != nil {
 		return fmt.Errorf("read retained provider install transaction: %w", err)
 	}
-	providerJournal, providerFound, err := readTransactionJournal(paths.Journal)
+	providerJournal, providerFound, err := readTransactionJournalForConfig(paths.Journal, config)
 	if err != nil {
 		return fmt.Errorf("read retained provider refresh transaction: %w", err)
 	}
@@ -622,7 +777,11 @@ func (installer Installer) recoverInstallTransaction(ctx context.Context, config
 		if providerFound {
 			providerRollbackErr = refresher.rollbackDeferredRefresh(ctx, config)
 		}
-		rollbackErr := installer.rollbackInstall(ctx, config, journal.Snapshots, journal.PreviousUnits, journal.AgentStopped, true, journal.MaintenanceID, journal.Activation)
+		reason := installMaintenanceReason
+		if journal.Operation == "uninstall" {
+			reason = uninstallMaintenanceReason
+		}
+		rollbackErr := installer.rollbackInstall(ctx, config, journal.Snapshots, journal.PreviousUnits, journal.AgentStopped, true, journal.MaintenanceID, reason, journal.Activation)
 		if err := errors.Join(providerRollbackErr, rollbackErr); err != nil {
 			return fmt.Errorf("rollback interrupted retained provider %s: %w", journal.Operation, err)
 		}
@@ -677,13 +836,16 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 		return Status{}, fmt.Errorf("acquire retained provider install lock: %w", err)
 	}
 	defer func() { returnErr = errors.Join(returnErr, lock.Release()) }()
-	if err := os.MkdirAll(paths.Root, 0o700); err != nil {
+	if err := mkdirAllDurable(paths.Root, 0o700); err != nil {
 		return Status{}, fmt.Errorf("create retained provider root: %w", err)
 	}
 	if err := validateInstallRoot(paths.Root); err != nil {
 		return Status{}, err
 	}
 	if err := installer.recoverLifecycleTransaction(ctx, home, paths, lifecycleRefresher); err != nil {
+		return Status{}, err
+	}
+	if err := validateInstalledConfigBinding(home, config, paths); err != nil {
 		return Status{}, err
 	}
 	if err := installer.recoverInstallTransaction(ctx, config, paths, lifecycleRefresher); err != nil {
@@ -693,13 +855,19 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 	if err != nil {
 		return Status{}, err
 	}
-	active, activeFound, err := readActiveState(paths.ActiveState)
+	active, activeFound, err := readActiveStateForConfig(paths.ActiveState, config)
 	if err != nil {
 		return Status{}, err
 	}
 	effect := ProviderChanged
 	if activeFound && active.Current.Update.SHA256 == update.SHA256 {
-		effect = ProviderUnchanged
+		runtimeRepair, err := lifecycleRefresher.activeProviderImageNeedsRepair(ctx, config, active.Current)
+		if err != nil {
+			return Status{}, err
+		}
+		if !runtimeRepair {
+			effect = ProviderUnchanged
+		}
 	}
 	transaction, err := newLifecycleJournal(config, LifecycleInstall, effect, nil, installer.now())
 	if err != nil {
@@ -720,14 +888,16 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 		return Status{}, err
 	}
 	fail := func(cause error) (Status, error) {
-		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), lifecycleRecoveryTimeout)
 		defer cancel()
-		return Status{}, errors.Join(cause, installer.recoverLifecycleTransaction(rollbackContext, home, paths, lifecycleRefresher))
+		auditErr := writeLifecycleDiagnostic(home, paths, &transaction, AuditError, "operation_failed", installer.now())
+		return Status{}, errors.Join(cause, auditErr, installer.recoverLifecycleTransaction(rollbackContext, home, paths, lifecycleRefresher))
 	}
-	if err := installer.beginMaintenance(ctx, config, installMaintenanceID, installMaintenanceReason); err != nil {
+	maintenance, err := installer.beginMaintenance(ctx, config, transaction.TransactionID, installMaintenanceReason)
+	if err != nil {
 		return fail(err)
 	}
-	if err := installer.waitLocalState(ctx, config, "unavailable"); err != nil {
+	if err := installer.waitLocalStateAfter(ctx, config, "unavailable", maintenance.StartedAt); err != nil {
 		return Status{}, fmt.Errorf("wait for retained agent maintenance fence: %w", err)
 	}
 	if err := installer.reattestLifecycleAuthority(ctx, home, transaction); err != nil {
@@ -736,7 +906,7 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 	if err := snapshotManagedFilesForLifecycle(home, paths, &transaction, installer.now()); err != nil {
 		return fail(fmt.Errorf("snapshot retained provider wiring: %w", err))
 	}
-	previousUnits, err := installer.captureManagedUnitStates(ctx)
+	previousUnits, err := installer.captureManagedUnitStates(ctx, config.SystemctlPath)
 	if err != nil {
 		return fail(fmt.Errorf("snapshot retained provider unit state: %w", err))
 	}
@@ -756,13 +926,13 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 	if err := writeLifecycleTransition(home, paths, &transaction, LifecycleFenced, "", installer.now()); err != nil {
 		return fail(err)
 	}
-	if err := installer.systemctl(ctx, "stop", config.AgentUnit); err != nil {
+	if err := installer.systemctl(ctx, config.SystemctlPath, "stop", config.AgentUnit); err != nil {
 		return fail(fmt.Errorf("stop retained agent: %w", err))
 	}
 	watchUnits := previouslyLoadedWatchUnits(previousUnits)
 	if len(watchUnits) > 0 {
 		arguments := append([]string{"disable", "--now"}, watchUnits...)
-		if err := installer.systemctl(ctx, arguments...); err != nil {
+		if err := installer.systemctl(ctx, config.SystemctlPath, arguments...); err != nil {
 			return fail(fmt.Errorf("pause retained provider refresh: %w", err))
 		}
 	}
@@ -772,7 +942,7 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 	if err := installer.ensureProviderNetwork(ctx, config); err != nil {
 		return fail(err)
 	}
-	if err := installer.systemctl(ctx, "daemon-reload"); err != nil {
+	if err := installer.systemctl(ctx, config.SystemctlPath, "daemon-reload"); err != nil {
 		return fail(fmt.Errorf("reload user systemd: %w", err))
 	}
 	loadedSignature, err := installer.inspectAgentUnitSignature(ctx, home, config)
@@ -789,7 +959,7 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 	if err := writeLifecycleJournal(home, paths, transaction); err != nil {
 		return fail(fmt.Errorf("record provider service activation: %w", err))
 	}
-	if err := installer.systemctl(ctx, "enable", providerServiceUnit); err != nil {
+	if err := installer.systemctl(ctx, config.SystemctlPath, "enable", providerServiceUnit); err != nil {
 		return fail(fmt.Errorf("enable provider service: %w", err))
 	}
 	refresh := installer.Refresh
@@ -797,7 +967,7 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 	if refresh == nil || probeActive == nil {
 		if refresh == nil {
 			refresh = func(ctx context.Context, config Config) (Status, error) {
-				return lifecycleRefresher.refreshUnderLifecycleTransaction(ctx, config, false, true, transaction.TransactionID, config.ProfileID, "")
+				return lifecycleRefresher.refreshUnderLifecycleTransaction(ctx, config, false, true, transaction.TransactionID, config.ProfileID, "", effect)
 			}
 		}
 		if probeActive == nil {
@@ -814,7 +984,7 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 	if transaction.Unchanged != nil {
 		transaction.Unchanged.StableProbeAt = installer.now()
 	}
-	inner, innerFound, err := readTransactionJournal(paths.Journal)
+	inner, innerFound, err := readTransactionJournalForConfig(paths.Journal, config)
 	if err != nil {
 		return fail(err)
 	}
@@ -830,7 +1000,7 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 	if err := writeLifecycleJournal(home, paths, transaction); err != nil {
 		return fail(err)
 	}
-	_, err = installer.enableWatchUnitBefore(ctx, refreshPathUnit, func() error {
+	_, err = installer.enableWatchUnitBefore(ctx, config.SystemctlPath, refreshPathUnit, func() error {
 		activation := transaction.Activation
 		activation.RefreshPath = true
 		transaction.Activation = activation
@@ -840,7 +1010,7 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 	if err != nil {
 		return fail(fmt.Errorf("enable retained provider refresh: %w", err))
 	}
-	_, err = installer.enableWatchUnitBefore(ctx, refreshTimerUnit, func() error {
+	_, err = installer.enableWatchUnitBefore(ctx, config.SystemctlPath, refreshTimerUnit, func() error {
 		activation := transaction.Activation
 		activation.RefreshTimer = true
 		transaction.Activation = activation
@@ -853,10 +1023,11 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 	if err := installer.reattestLifecycleAuthority(ctx, home, transaction); err != nil {
 		return fail(err)
 	}
-	if err := installer.systemctl(ctx, "start", config.AgentUnit); err != nil {
+	agentRestartedAfter := installer.now()
+	if err := installer.systemctl(ctx, config.SystemctlPath, "start", config.AgentUnit); err != nil {
 		return fail(fmt.Errorf("restart retained agent: %w", err))
 	}
-	if err := installer.waitLocalState(ctx, config, "unavailable"); err != nil {
+	if err := installer.waitLocalStateAfter(ctx, config, "unavailable", agentRestartedAfter); err != nil {
 		return fail(fmt.Errorf("verify retained agent remains fenced: %w", err))
 	}
 	if err := installer.reattestLifecycleAuthority(ctx, home, transaction); err != nil {
@@ -872,6 +1043,7 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 		return fail(err)
 	}
 	_ = drainLifecycleAudit(home, paths, &transaction)
+	maintenanceReleasedAfter := installer.now()
 	if err := installer.releaseLifecycleMaintenance(ctx, home, transaction); err != nil {
 		return Status{}, fmt.Errorf("release retained agent maintenance fence: %w", err)
 	}
@@ -881,10 +1053,26 @@ func (installer Installer) Install(ctx context.Context, home string, config Conf
 	if err := finalizeLifecycleTransaction(home, paths, &transaction, lifecycleRefresher); err != nil {
 		return Status{}, err
 	}
-	if err := installer.waitLocalState(ctx, config, "idle"); err != nil {
+	if err := installer.waitLocalStateAfter(ctx, config, "idle", maintenanceReleasedAfter); err != nil {
 		return Status{}, fmt.Errorf("wait for retained agent idle state: %w", err)
 	}
 	return status, nil
+}
+
+func validateInstalledConfigBinding(home string, requested Config, paths LifecyclePaths) error {
+	if _, err := os.Lstat(paths.ConfigFile); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect installed retained provider config: %w", err)
+	}
+	installed, err := ReadConfigFile(paths.ConfigFile, home)
+	if err != nil {
+		return fmt.Errorf("read installed retained provider config: %w", err)
+	}
+	if !reflect.DeepEqual(installed, requested) {
+		return errors.New("lifecycle config must exactly match the installed retained provider config")
+	}
+	return nil
 }
 
 func (installer Installer) Uninstall(ctx context.Context, home string, config Config, purge bool) (status Status, returnErr error) {
@@ -901,13 +1089,16 @@ func (installer Installer) Uninstall(ctx context.Context, home string, config Co
 	}
 	defer func() { returnErr = errors.Join(returnErr, lock.Release()) }()
 	lifecycleRefresher := Refresher{Runner: installer.Runner, Now: installer.Now, Sleep: installer.Sleep}
-	if err := os.MkdirAll(paths.Root, 0o700); err != nil {
+	if err := mkdirAllDurable(paths.Root, 0o700); err != nil {
 		return Status{}, fmt.Errorf("create retained provider root: %w", err)
 	}
 	if err := validateInstallRoot(paths.Root); err != nil {
 		return Status{}, err
 	}
 	if err := installer.recoverLifecycleTransaction(ctx, home, paths, lifecycleRefresher); err != nil {
+		return Status{}, err
+	}
+	if err := validateInstalledConfigBinding(home, config, paths); err != nil {
 		return Status{}, err
 	}
 	if err := installer.recoverInstallTransaction(ctx, config, paths, lifecycleRefresher); err != nil {
@@ -932,14 +1123,16 @@ func (installer Installer) Uninstall(ctx context.Context, home string, config Co
 		return Status{}, err
 	}
 	fail := func(cause error) (Status, error) {
-		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), lifecycleRecoveryTimeout)
 		defer cancel()
-		return Status{}, errors.Join(cause, installer.recoverLifecycleTransaction(rollbackContext, home, paths, lifecycleRefresher))
+		auditErr := writeLifecycleDiagnostic(home, paths, &transaction, AuditError, "operation_failed", installer.now())
+		return Status{}, errors.Join(cause, auditErr, installer.recoverLifecycleTransaction(rollbackContext, home, paths, lifecycleRefresher))
 	}
-	if err := installer.beginMaintenance(ctx, config, uninstallMaintenanceID, uninstallMaintenanceReason); err != nil {
+	maintenance, err := installer.beginMaintenance(ctx, config, transaction.TransactionID, uninstallMaintenanceReason)
+	if err != nil {
 		return fail(err)
 	}
-	if err := installer.waitLocalState(ctx, config, "unavailable"); err != nil {
+	if err := installer.waitLocalStateAfter(ctx, config, "unavailable", maintenance.StartedAt); err != nil {
 		return Status{}, fmt.Errorf("wait for retained agent maintenance fence: %w", err)
 	}
 	if err := installer.reattestLifecycleAuthority(ctx, home, transaction); err != nil {
@@ -948,7 +1141,7 @@ func (installer Installer) Uninstall(ctx context.Context, home string, config Co
 	if err := snapshotManagedFilesForLifecycle(home, paths, &transaction, installer.now()); err != nil {
 		return fail(fmt.Errorf("snapshot retained provider wiring: %w", err))
 	}
-	previousUnits, err := installer.captureManagedUnitStates(ctx)
+	previousUnits, err := installer.captureManagedUnitStates(ctx, config.SystemctlPath)
 	if err != nil {
 		return fail(fmt.Errorf("snapshot retained provider unit state: %w", err))
 	}
@@ -966,10 +1159,10 @@ func (installer Installer) Uninstall(ctx context.Context, home string, config Co
 	if err := writeLifecycleTransition(home, paths, &transaction, LifecycleFenced, "", installer.now()); err != nil {
 		return fail(err)
 	}
-	if err := installer.systemctl(ctx, "stop", config.AgentUnit); err != nil {
+	if err := installer.systemctl(ctx, config.SystemctlPath, "stop", config.AgentUnit); err != nil {
 		return fail(fmt.Errorf("stop retained agent: %w", err))
 	}
-	if err := installer.systemctl(ctx, "disable", "--now", refreshPathUnit, refreshTimerUnit, providerServiceUnit); err != nil {
+	if err := installer.systemctl(ctx, config.SystemctlPath, "disable", "--now", refreshPathUnit, refreshTimerUnit, providerServiceUnit); err != nil {
 		return fail(fmt.Errorf("disable retained provider wiring: %w", err))
 	}
 	for _, path := range managedWiringPaths(paths) {
@@ -977,7 +1170,7 @@ func (installer Installer) Uninstall(ctx context.Context, home string, config Co
 			return fail(fmt.Errorf("remove retained provider wiring: %w", err))
 		}
 	}
-	if err := installer.systemctl(ctx, "daemon-reload"); err != nil {
+	if err := installer.systemctl(ctx, config.SystemctlPath, "daemon-reload"); err != nil {
 		return fail(fmt.Errorf("reload user systemd: %w", err))
 	}
 	loadedSignature, err := installer.inspectAgentUnitSignature(ctx, home, config)
@@ -990,10 +1183,11 @@ func (installer Installer) Uninstall(ctx context.Context, home string, config Co
 	if err := installer.reattestLifecycleAuthority(ctx, home, transaction); err != nil {
 		return fail(err)
 	}
-	if err := installer.systemctl(ctx, "start", config.AgentUnit); err != nil {
+	agentRestartedAfter := installer.now()
+	if err := installer.systemctl(ctx, config.SystemctlPath, "start", config.AgentUnit); err != nil {
 		return fail(fmt.Errorf("restart retained agent: %w", err))
 	}
-	if err := installer.waitLocalState(ctx, config, "unavailable"); err != nil {
+	if err := installer.waitLocalStateAfter(ctx, config, "unavailable", agentRestartedAfter); err != nil {
 		return fail(fmt.Errorf("verify retained agent remains fenced: %w", err))
 	}
 	if err := installer.reattestLifecycleAuthority(ctx, home, transaction); err != nil {
@@ -1009,13 +1203,14 @@ func (installer Installer) Uninstall(ctx context.Context, home string, config Co
 		return fail(err)
 	}
 	_ = drainLifecycleAudit(home, paths, &transaction)
+	maintenanceReleasedAfter := installer.now()
 	if err := installer.releaseLifecycleMaintenance(ctx, home, transaction); err != nil {
 		return Status{}, fmt.Errorf("release retained agent maintenance fence: %w", err)
 	}
 	if err := writeLifecycleTransition(home, paths, &transaction, LifecycleCommitted, LifecycleCommit, installer.now()); err != nil {
 		return Status{}, fmt.Errorf("commit retained provider uninstall: %w", err)
 	}
-	if err := installer.waitLocalState(ctx, config, "idle"); err != nil {
+	if err := installer.waitLocalStateAfter(ctx, config, "idle", maintenanceReleasedAfter); err != nil {
 		return Status{}, fmt.Errorf("wait for retained agent idle state: %w", err)
 	}
 	if err := finalizeLifecycleTransaction(home, paths, &transaction, lifecycleRefresher); err != nil {
@@ -1073,7 +1268,7 @@ func (installer Installer) Status(ctx context.Context, home string, config Confi
 		return Status{}, err
 	}
 	paths := LifecyclePathsFor(config)
-	active, found, err := readActiveState(paths.ActiveState)
+	active, found, err := readActiveStateForConfig(paths.ActiveState, config)
 	if err != nil {
 		return Status{}, err
 	}
@@ -1090,7 +1285,10 @@ func (installer Installer) Status(ctx context.Context, home string, config Confi
 	if err := validateOwner(unitInfo); err != nil {
 		return Status{}, fmt.Errorf("retained provider service unit: %w", err)
 	}
-	output, err := installer.run(ctx, Command{Path: "/usr/bin/systemctl", Args: []string{
+	if _, err := hashHostExecutable(config.SystemctlPath); err != nil {
+		return Status{}, fmt.Errorf("validate systemctl authority: %w", err)
+	}
+	output, err := installer.run(ctx, Command{Path: config.SystemctlPath, Args: []string{
 		"--user", "show", providerServiceUnit, "--property", "ActiveState", "--value",
 	}})
 	if err != nil {
@@ -1134,20 +1332,81 @@ func (installer Installer) preflightInstall(ctx context.Context, config Config, 
 }
 
 func (installer Installer) runSystemPreflight(ctx context.Context, config Config) error {
-	if err := installer.systemctl(ctx, "show-environment"); err != nil {
+	if err := validateConfiguredHostExecutables(config); err != nil {
+		return err
+	}
+	uid, err := installer.currentUserID()
+	if err != nil {
+		return fmt.Errorf("resolve retained provider user identity: %w", err)
+	}
+	if uid == "0" {
+		return errors.New("retained provider install requires a non-root user")
+	}
+	if err := installer.systemctl(ctx, config.SystemctlPath, "show-environment"); err != nil {
 		return fmt.Errorf("user systemd preflight: %w", err)
+	}
+	linger, err := installer.run(ctx, Command{Path: config.LoginctlPath, Args: []string{
+		"show-user", uid, "--property", "Linger", "--value",
+	}})
+	if err != nil {
+		return fmt.Errorf("user systemd lingering preflight: %w", err)
+	}
+	if strings.TrimSpace(string(linger)) != "yes" {
+		return errors.New("user systemd lingering must be enabled")
 	}
 	if _, err := installer.run(ctx, Command{Path: config.PodmanPath, Args: []string{"version", "--format", "{{.Client.Version}}"}}); err != nil {
 		return fmt.Errorf("rootless Podman preflight: %w", err)
 	}
+	rootless, err := installer.run(ctx, Command{Path: config.PodmanPath, Args: []string{
+		"info", "--format", "{{.Host.Security.Rootless}}",
+	}})
+	if err != nil {
+		return fmt.Errorf("inspect rootless Podman preflight: %w", err)
+	}
+	if strings.TrimSpace(string(rootless)) != "true" {
+		return errors.New("podman must report a rootless runtime")
+	}
 	return installer.runSupervisorConfigPreflight(ctx, config)
 }
 
+func (installer Installer) currentUserID() (string, error) {
+	if installer.UserID != nil {
+		return installer.UserID()
+	}
+	current, err := user.Current()
+	if err != nil {
+		return "", err
+	}
+	if _, err := strconv.ParseUint(current.Uid, 10, 32); err != nil {
+		return "", errors.New("current user has no numeric UID")
+	}
+	return current.Uid, nil
+}
+
 func (installer Installer) runAgentSystemPreflight(ctx context.Context, config Config) error {
-	if err := installer.systemctl(ctx, "show-environment"); err != nil {
+	if err := validateConfiguredHostExecutables(config); err != nil {
+		return err
+	}
+	if err := installer.systemctl(ctx, config.SystemctlPath, "show-environment"); err != nil {
 		return fmt.Errorf("user systemd preflight: %w", err)
 	}
 	return installer.runSupervisorConfigPreflight(ctx, config)
+}
+
+func validateConfiguredHostExecutables(config Config) error {
+	for _, executable := range []struct {
+		label string
+		path  string
+	}{
+		{label: "podman", path: config.PodmanPath},
+		{label: "systemctl", path: config.SystemctlPath},
+		{label: "loginctl", path: config.LoginctlPath},
+	} {
+		if _, err := hashHostExecutable(executable.path); err != nil {
+			return fmt.Errorf("validate %s authority: %w", executable.label, err)
+		}
+	}
+	return nil
 }
 
 func (installer Installer) runSupervisorConfigPreflight(ctx context.Context, config Config) error {
@@ -1172,12 +1431,15 @@ func (installer Installer) ensureProviderNetwork(ctx context.Context, config Con
 	return nil
 }
 
-func (installer Installer) beginMaintenance(ctx context.Context, config Config, id, reason string) error {
+func (installer Installer) beginMaintenance(ctx context.Context, config Config, id, reason string) (maintenanceRecord, error) {
 	state, err := installer.maintenanceCommand(ctx, config, "begin", id, reason)
 	if err != nil {
-		return err
+		return maintenanceRecord{}, err
 	}
-	return validateMaintenanceState(state, true, config.ProfileID, id, reason)
+	if err := validateMaintenanceState(state, true, config.ProfileID, id, reason); err != nil {
+		return maintenanceRecord{}, err
+	}
+	return *state.Maintenance, nil
 }
 
 func (installer Installer) endMaintenance(ctx context.Context, config Config, id, reason string) error {
@@ -1192,7 +1454,7 @@ func (installer Installer) releaseLifecycleMaintenance(ctx context.Context, home
 	if err := installer.reattestLifecycleAuthority(ctx, home, journal); err != nil {
 		return err
 	}
-	id, reason, err := lifecycleMaintenanceIdentity(journal.Operation)
+	id, reason, err := lifecycleMaintenanceIdentity(journal)
 	if err != nil {
 		return err
 	}
@@ -1270,7 +1532,10 @@ func validateMaintenanceState(state maintenanceState, active bool, profileID, id
 	return nil
 }
 
-func (installer Installer) waitLocalState(ctx context.Context, config Config, expected string) error {
+func (installer Installer) waitLocalStateAfter(ctx context.Context, config Config, expected string, observedAfter time.Time) error {
+	if observedAfter.IsZero() {
+		return errors.New("local agent observation boundary is required")
+	}
 	for attempt := 0; attempt < localStatusAttempts; attempt++ {
 		output, err := installer.run(ctx, Command{Path: config.ComputeAgentPath, Args: []string{
 			"local-status", "sanitize", "-path", config.LocalStatusPath,
@@ -1285,7 +1550,7 @@ func (installer Installer) waitLocalState(ctx context.Context, config Config, ex
 		if status.ProtocolVersion != localStatusProtocolVersion || status.WorkerID != config.WorkerID || status.UpdatedAt.IsZero() {
 			return errors.New("local agent status identity or protocol mismatch")
 		}
-		if status.State == expected && status.TaskID == "" && status.LeaseID == "" {
+		if status.UpdatedAt.After(observedAfter) && status.State == expected && status.TaskID == "" && status.LeaseID == "" {
 			return nil
 		}
 		if attempt+1 < localStatusAttempts {
@@ -1297,7 +1562,10 @@ func (installer Installer) waitLocalState(ctx context.Context, config Config, ex
 	return fmt.Errorf("local agent did not reach %s without an active task or lease", expected)
 }
 
-func (installer Installer) waitLocalDrained(ctx context.Context, config Config) error {
+func (installer Installer) waitLocalDrainedAfter(ctx context.Context, config Config, observedAfter time.Time) error {
+	if observedAfter.IsZero() {
+		return errors.New("local agent drain boundary is required")
+	}
 	for attempt := 0; attempt < localStatusAttempts; attempt++ {
 		output, err := installer.run(ctx, Command{Path: config.ComputeAgentPath, Args: []string{
 			"local-status", "sanitize", "-path", config.LocalStatusPath,
@@ -1312,7 +1580,7 @@ func (installer Installer) waitLocalDrained(ctx context.Context, config Config) 
 		if status.ProtocolVersion != localStatusProtocolVersion || status.WorkerID != config.WorkerID || status.UpdatedAt.IsZero() {
 			return errors.New("local agent status identity or protocol mismatch")
 		}
-		if status.TaskID == "" && status.LeaseID == "" {
+		if status.UpdatedAt.After(observedAfter) && status.TaskID == "" && status.LeaseID == "" {
 			return nil
 		}
 		if attempt+1 < localStatusAttempts {
@@ -1324,26 +1592,22 @@ func (installer Installer) waitLocalDrained(ctx context.Context, config Config) 
 	return errors.New("local agent remained assigned to a task or lease")
 }
 
-func (installer Installer) systemctl(ctx context.Context, args ...string) error {
+func (installer Installer) systemctl(ctx context.Context, path string, args ...string) error {
 	arguments := append([]string{"--user"}, args...)
-	_, err := installer.run(ctx, Command{Path: "/usr/bin/systemctl", Args: arguments})
+	_, err := installer.run(ctx, Command{Path: path, Args: arguments})
 	return err
 }
 
-func (installer Installer) enableWatchUnit(ctx context.Context, unit string) (bool, error) {
-	return installer.enableWatchUnitBefore(ctx, unit, nil)
-}
-
-func (installer Installer) enableWatchUnitBefore(ctx context.Context, unit string, beforeMutation func() error) (bool, error) {
+func (installer Installer) enableWatchUnitBefore(ctx context.Context, systemctlPath, unit string, beforeMutation func() error) (bool, error) {
 	if beforeMutation != nil {
 		if err := beforeMutation(); err != nil {
 			return false, err
 		}
 	}
-	if err := installer.systemctl(ctx, "enable", "--now", unit); err == nil {
+	if err := installer.systemctl(ctx, systemctlPath, "enable", "--now", unit); err == nil {
 		return true, nil
 	} else {
-		activated, inspectErr := installer.inspectUnitActivation(ctx, unit)
+		activated, inspectErr := installer.inspectUnitActivation(ctx, systemctlPath, unit)
 		if inspectErr != nil {
 			return true, errors.Join(err, fmt.Errorf("inspect failed unit activation: %w", inspectErr))
 		}
@@ -1351,8 +1615,8 @@ func (installer Installer) enableWatchUnitBefore(ctx context.Context, unit strin
 	}
 }
 
-func (installer Installer) inspectUnitActivation(ctx context.Context, unit string) (bool, error) {
-	state, err := installer.inspectUnitState(ctx, unit)
+func (installer Installer) inspectUnitActivation(ctx context.Context, systemctlPath, unit string) (bool, error) {
+	state, err := installer.inspectUnitState(ctx, systemctlPath, unit)
 	if err != nil {
 		return false, err
 	}
@@ -1360,7 +1624,7 @@ func (installer Installer) inspectUnitActivation(ctx context.Context, unit strin
 }
 
 func (installer Installer) inspectAgentUnitSignature(ctx context.Context, home string, config Config) (LifecycleSystemdSignature, error) {
-	output, err := installer.run(ctx, Command{Path: "/usr/bin/systemctl", Args: []string{
+	output, err := installer.run(ctx, Command{Path: config.SystemctlPath, Args: []string{
 		"--user", "show", config.AgentUnit,
 		"--property", "LoadState", "--property", "FragmentPath", "--property", "DropInPaths",
 	}})
@@ -1680,7 +1944,7 @@ func readAndAttestLifecycleSystemdPath(home, path string) (LifecycleFileAttestat
 	if err != nil {
 		return LifecycleFileAttestation{}, nil, fmt.Errorf("open effective agent systemd input: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	opened, err := file.Stat()
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(entry, opened) || opened.Size() > MaxStateFileBytes {
 		return LifecycleFileAttestation{}, nil, errors.New("effective agent systemd input changed during open")
@@ -1700,8 +1964,8 @@ func readAndAttestLifecycleSystemdPath(home, path string) (LifecycleFileAttestat
 	return attestation, contents, nil
 }
 
-func (installer Installer) inspectUnitState(ctx context.Context, unit string) (systemdUnitState, error) {
-	output, err := installer.run(ctx, Command{Path: "/usr/bin/systemctl", Args: []string{
+func (installer Installer) inspectUnitState(ctx context.Context, systemctlPath, unit string) (systemdUnitState, error) {
+	output, err := installer.run(ctx, Command{Path: systemctlPath, Args: []string{
 		"--user", "show", unit,
 		"--property", "LoadState", "--property", "FragmentPath",
 		"--property", "ActiveState", "--property", "UnitFileState",
@@ -1729,10 +1993,10 @@ func (installer Installer) inspectUnitState(ctx context.Context, unit string) (s
 	}, nil
 }
 
-func (installer Installer) captureManagedUnitStates(ctx context.Context) (map[string]systemdUnitState, error) {
+func (installer Installer) captureManagedUnitStates(ctx context.Context, systemctlPath string) (map[string]systemdUnitState, error) {
 	states := map[string]systemdUnitState{}
 	for _, unit := range []string{providerServiceUnit, refreshPathUnit, refreshTimerUnit} {
-		state, err := installer.inspectUnitState(ctx, unit)
+		state, err := installer.inspectUnitState(ctx, systemctlPath, unit)
 		if err != nil {
 			return nil, fmt.Errorf("inspect %s: %w", unit, err)
 		}
@@ -1747,25 +2011,25 @@ func (installer Installer) captureManagedUnitStates(ctx context.Context) (map[st
 	return states, nil
 }
 
-func (installer Installer) restoreUnitState(ctx context.Context, unit string, state systemdUnitState) error {
+func (installer Installer) restoreUnitState(ctx context.Context, systemctlPath, unit string, state systemdUnitState) error {
 	if err := validateRestorableUnitState(state); err != nil {
 		return err
 	}
 	var restoreErr error
 	switch state.UnitFileState {
 	case "enabled":
-		restoreErr = errors.Join(restoreErr, installer.systemctl(ctx, "enable", unit))
+		restoreErr = errors.Join(restoreErr, installer.systemctl(ctx, systemctlPath, "enable", unit))
 	case "enabled-runtime":
-		restoreErr = errors.Join(restoreErr, installer.systemctl(ctx, "enable", "--runtime", unit))
+		restoreErr = errors.Join(restoreErr, installer.systemctl(ctx, systemctlPath, "enable", "--runtime", unit))
 	case "disabled":
-		restoreErr = errors.Join(restoreErr, installer.systemctl(ctx, "disable", unit))
+		restoreErr = errors.Join(restoreErr, installer.systemctl(ctx, systemctlPath, "disable", unit))
 	case "static", "indirect", "generated", "transient":
 	}
 	switch state.ActiveState {
 	case "active":
-		restoreErr = errors.Join(restoreErr, installer.systemctl(ctx, "start", unit))
+		restoreErr = errors.Join(restoreErr, installer.systemctl(ctx, systemctlPath, "start", unit))
 	case "inactive":
-		restoreErr = errors.Join(restoreErr, installer.systemctl(ctx, "stop", unit))
+		restoreErr = errors.Join(restoreErr, installer.systemctl(ctx, systemctlPath, "stop", unit))
 	}
 	return restoreErr
 }
@@ -1790,23 +2054,21 @@ func validateRestorableUnitState(state systemdUnitState) error {
 	return nil
 }
 
-func (installer Installer) rollbackInstall(ctx context.Context, config Config, snapshots []managedFileSnapshot, previousUnits map[string]systemdUnitState, agentStopped, maintenanceActive bool, maintenanceID string, activation systemdActivation) error {
-	return installer.rollbackInstallBeforeStart(ctx, config, snapshots, previousUnits, agentStopped, maintenanceActive, maintenanceID, activation, nil)
+func (installer Installer) rollbackInstall(ctx context.Context, config Config, snapshots []managedFileSnapshot, previousUnits map[string]systemdUnitState, agentStopped, maintenanceActive bool, maintenanceID, maintenanceReason string, activation systemdActivation) error {
+	if err := installer.rollbackInstallBeforeStart(ctx, config, snapshots, previousUnits, agentStopped, maintenanceActive, maintenanceID, maintenanceReason, activation, nil); err != nil {
+		return err
+	}
+	return removeSnapshots(snapshots)
 }
 
-func (installer Installer) rollbackInstallBeforeStart(ctx context.Context, config Config, snapshots []managedFileSnapshot, previousUnits map[string]systemdUnitState, agentStopped, maintenanceActive bool, maintenanceID string, activation systemdActivation, beforeStart func(context.Context) error) error {
-	rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+func (installer Installer) rollbackInstallBeforeStart(ctx context.Context, config Config, snapshots []managedFileSnapshot, previousUnits map[string]systemdUnitState, agentStopped, maintenanceActive bool, maintenanceID, maintenanceReason string, activation systemdActivation, beforeStart func(context.Context) error) error {
+	rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), installRollbackTimeout)
 	defer cancel()
 	if !agentStopped {
-		cleanupErr := removeSnapshots(snapshots)
 		if maintenanceActive {
-			reason := installMaintenanceReason
-			if maintenanceID == uninstallMaintenanceID {
-				reason = uninstallMaintenanceReason
-			}
-			cleanupErr = errors.Join(cleanupErr, installer.endMaintenance(rollbackContext, config, maintenanceID, reason))
+			return installer.endMaintenance(rollbackContext, config, maintenanceID, maintenanceReason)
 		}
-		return cleanupErr
+		return nil
 	}
 	var rollbackErr error
 	activatedUnits := make([]string, 0, 3)
@@ -1821,36 +2083,29 @@ func (installer Installer) rollbackInstallBeforeStart(ctx context.Context, confi
 	}
 	if len(activatedUnits) > 0 {
 		arguments := append([]string{"disable", "--now"}, activatedUnits...)
-		rollbackErr = errors.Join(rollbackErr, installer.systemctl(rollbackContext, arguments...))
+		rollbackErr = errors.Join(rollbackErr, installer.systemctl(rollbackContext, config.SystemctlPath, arguments...))
 	}
 	if err := restoreManagedFileContents(snapshots); err != nil {
 		rollbackErr = errors.Join(rollbackErr, err)
 	} else {
-		rollbackErr = errors.Join(rollbackErr, installer.systemctl(rollbackContext, "daemon-reload"))
+		rollbackErr = errors.Join(rollbackErr, installer.systemctl(rollbackContext, config.SystemctlPath, "daemon-reload"))
 		for _, unit := range []string{providerServiceUnit, refreshPathUnit, refreshTimerUnit} {
 			if state, found := previousUnits[unit]; found {
-				rollbackErr = errors.Join(rollbackErr, installer.restoreUnitState(rollbackContext, unit, state))
+				rollbackErr = errors.Join(rollbackErr, installer.restoreUnitState(rollbackContext, config.SystemctlPath, unit, state))
 			}
 		}
 	}
 	if beforeStart == nil {
-		rollbackErr = errors.Join(rollbackErr, installer.systemctl(rollbackContext, "start", config.AgentUnit))
+		rollbackErr = errors.Join(rollbackErr, installer.systemctl(rollbackContext, config.SystemctlPath, "start", config.AgentUnit))
 	} else if rollbackErr == nil {
 		if err := beforeStart(rollbackContext); err != nil {
 			rollbackErr = err
 		} else {
-			rollbackErr = installer.systemctl(rollbackContext, "start", config.AgentUnit)
+			rollbackErr = installer.systemctl(rollbackContext, config.SystemctlPath, "start", config.AgentUnit)
 		}
 	}
 	if rollbackErr == nil && maintenanceActive {
-		reason := installMaintenanceReason
-		if maintenanceID == uninstallMaintenanceID {
-			reason = uninstallMaintenanceReason
-		}
-		rollbackErr = installer.endMaintenance(rollbackContext, config, maintenanceID, reason)
-	}
-	if rollbackErr == nil {
-		rollbackErr = removeSnapshots(snapshots)
+		rollbackErr = installer.endMaintenance(rollbackContext, config, maintenanceID, maintenanceReason)
 	}
 	return rollbackErr
 }
@@ -1868,7 +2123,7 @@ func writeInstalledProvider(config Config, paths LifecyclePaths, executable, dig
 	if err := WriteInstallMaterial(paths, material); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+	if err := mkdirAllDurable(paths.ProviderState, 0o700); err != nil {
 		return fmt.Errorf("create provider state directory: %w", err)
 	}
 	for _, file := range []struct {
@@ -1892,19 +2147,10 @@ func managedInstallPaths(paths LifecyclePaths) []string {
 	return append([]string{
 		paths.ConfigFile, paths.Launcher,
 		paths.ActiveState, paths.Journal,
-		paths.ProviderEnv, paths.ProbeEnv, paths.AgentEnv,
+		paths.ProviderEnv, paths.ProbeEnv, paths.AgentEnv, paths.CAKey,
 		paths.ContainersConf,
 		paths.CAFile, paths.ServerCert, paths.ServerKey,
 	}, managedWiringPaths(paths)...)
-}
-
-func snapshotExisted(snapshots []managedFileSnapshot, path string) bool {
-	for _, snapshot := range snapshots {
-		if snapshot.Path == path {
-			return snapshot.Existed
-		}
-	}
-	return false
 }
 
 func previouslyLoadedWatchUnits(states map[string]systemdUnitState) []string {
@@ -1939,7 +2185,7 @@ func managedWiringIntent(paths LifecyclePaths, units SystemdUnits, present bool)
 }
 
 func snapshotManagedFiles(paths LifecyclePaths) ([]managedFileSnapshot, error) {
-	if err := os.MkdirAll(paths.Root, 0o700); err != nil {
+	if err := mkdirAllDurable(paths.Root, 0o700); err != nil {
 		return nil, err
 	}
 	backupRoot, err := os.MkdirTemp(paths.Root, ".install-backup-")
@@ -2129,13 +2375,13 @@ func replaceRegularFile(source, destination string, mode os.FileMode, maxBytes i
 	if err != nil {
 		return err
 	}
-	defer input.Close()
+	defer func() { _ = input.Close() }()
 	opened, err := input.Stat()
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(sourceInfo, opened) {
 		return errors.New("replacement source changed during open")
 	}
 	directory := filepath.Dir(destination)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
+	if err := mkdirAllDurable(directory, 0o700); err != nil {
 		return err
 	}
 	if err := rejectWritableDestination(destination); err != nil {

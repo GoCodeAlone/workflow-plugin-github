@@ -106,6 +106,9 @@ type LifecycleRecoveryAuthority struct {
 	Config           Config                    `json:"config"`
 	ComputeAgent     LifecycleFileAttestation  `json:"compute_agent"`
 	SupervisorConfig LifecycleFileAttestation  `json:"supervisor_config"`
+	Podman           LifecycleFileAttestation  `json:"podman"`
+	Systemctl        LifecycleFileAttestation  `json:"systemctl"`
+	Loginctl         LifecycleFileAttestation  `json:"loginctl"`
 	AgentUnitBefore  LifecycleSystemdSignature `json:"agent_unit_before"`
 }
 
@@ -201,6 +204,22 @@ func (authority LifecycleRecoveryAuthority) Validate(home string, identity Lifec
 	}
 	if authority.SupervisorConfig.Path != authority.Config.SupervisorConfigPath {
 		return errors.New("lifecycle supervisor config attestation path mismatch")
+	}
+	for _, executable := range []struct {
+		label       string
+		attestation LifecycleFileAttestation
+		path        string
+	}{
+		{label: "podman", attestation: authority.Podman, path: authority.Config.PodmanPath},
+		{label: "systemctl", attestation: authority.Systemctl, path: authority.Config.SystemctlPath},
+		{label: "loginctl", attestation: authority.Loginctl, path: authority.Config.LoginctlPath},
+	} {
+		if err := executable.attestation.Validate(); err != nil {
+			return fmt.Errorf("validate lifecycle %s attestation: %w", executable.label, err)
+		}
+		if executable.attestation.Path != executable.path {
+			return fmt.Errorf("lifecycle %s attestation path mismatch", executable.label)
+		}
 	}
 	if err := authority.AgentUnitBefore.Validate(home); err != nil {
 		return err
@@ -312,16 +331,30 @@ func (event LifecycleAuditEvent) Validate() error {
 	}
 	switch event.Kind {
 	case AuditPhase:
-		if event.ErrorClass != "" || event.Disposition != "" || event.Count != 0 || !event.FirstSeen.IsZero() || !event.LastSeen.IsZero() {
-			return errors.New("phase audit event error_class or diagnostic fields are invalid")
+		if (event.Outcome != "" && event.Outcome != LifecycleCommit && event.Outcome != LifecycleRollback) ||
+			(event.ProviderEffect != ProviderChanged && event.ProviderEffect != ProviderUnchanged && event.ProviderEffect != ProviderNotApplicable) ||
+			event.ErrorClass != "" || event.Disposition != "" || event.Count != 0 || !event.FirstSeen.IsZero() || !event.LastSeen.IsZero() {
+			return errors.New("phase audit event outcome, provider effect, error_class, or diagnostic fields are invalid")
+		}
+		if event.Operation == LifecycleUninstall {
+			if event.ProviderEffect != ProviderNotApplicable || event.Purge == nil {
+				return errors.New("uninstall phase audit event requires purge intent")
+			}
+		} else if event.ProviderEffect == ProviderNotApplicable || event.Purge != nil {
+			return errors.New("non-uninstall phase audit event has invalid provider effect or purge intent")
 		}
 	case AuditRecovery:
-		if !safeIdentifierPattern.MatchString(event.Disposition) || event.ErrorClass != "" {
+		if !safeIdentifierPattern.MatchString(event.Disposition) || event.Outcome != "" || event.ProviderEffect != "" || event.Purge != nil ||
+			event.ErrorClass != "" || event.Count == 0 || event.FirstSeen.IsZero() || event.LastSeen.Before(event.FirstSeen) {
 			return errors.New("recovery audit event disposition is invalid")
 		}
 	case AuditError, AuditOverflow:
-		if !safeIdentifierPattern.MatchString(event.ErrorClass) || event.Count == 0 || event.FirstSeen.IsZero() || event.LastSeen.Before(event.FirstSeen) || event.Outcome != "" || event.ProviderEffect != "" {
+		if !safeIdentifierPattern.MatchString(event.ErrorClass) || event.Count == 0 || event.FirstSeen.IsZero() || event.LastSeen.Before(event.FirstSeen) ||
+			event.Outcome != "" || event.ProviderEffect != "" || event.Purge != nil || event.Disposition != "" {
 			return errors.New("error audit event error_class or summary is invalid")
+		}
+		if event.Kind == AuditOverflow && event.ErrorClass != "other" {
+			return errors.New("overflow audit event error_class must be other")
 		}
 	default:
 		return errors.New("lifecycle audit event kind is invalid")
@@ -331,6 +364,9 @@ func (event LifecycleAuditEvent) Validate() error {
 	}
 	if event.Offset != nil && *event.Offset < 0 {
 		return errors.New("lifecycle audit event offset is invalid")
+	}
+	if (event.Digest == "") != (event.Offset == nil) {
+		return errors.New("lifecycle audit event pending append metadata is incomplete")
 	}
 	return nil
 }
@@ -368,8 +404,12 @@ func (queue *LifecycleAuditQueue) EnqueueDiagnostic(event LifecycleAuditEvent) e
 		if len(queue.Diagnostics) >= maxLifecycleDiagnosticEvents {
 			return errors.New("lifecycle audit diagnostic queue is full")
 		}
-		event.Kind = AuditOverflow
-		event.ErrorClass = "other"
+		event = LifecycleAuditEvent{
+			EventID: event.EventID, Timestamp: event.Timestamp,
+			TransactionID: event.TransactionID, WorkerID: event.WorkerID,
+			Operation: event.Operation, Phase: event.Phase,
+			Kind: AuditOverflow, ErrorClass: "other",
+		}
 	}
 	event.Sequence = queue.NextSequence
 	event.Count = 1
@@ -560,18 +600,22 @@ func (journal LifecycleJournal) validateSnapshots(home string, paths LifecyclePa
 			if snapshot.Mode != 0o600 && snapshot.Mode != 0o700 {
 				return errors.New("lifecycle snapshot mode is invalid")
 			}
-			if err := ValidateUserPath(home, snapshot.Backup, true); err != nil {
+			if !digestPattern.MatchString(snapshot.SHA256) {
+				return errors.New("lifecycle snapshot digest is invalid")
+			}
+			requireBackup := journal.Phase != LifecycleCommitted
+			if err := ValidateUserPath(home, snapshot.Backup, requireBackup); err != nil {
 				return fmt.Errorf("validate lifecycle snapshot: %w", err)
 			}
 			info, err := os.Lstat(snapshot.Backup)
+			if journal.Phase == LifecycleCommitted && errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != snapshot.Mode {
 				return errors.New("lifecycle snapshot is not an owner-only regular file")
 			}
 			if err := validateOwner(info); err != nil {
 				return fmt.Errorf("validate lifecycle snapshot owner: %w", err)
-			}
-			if !digestPattern.MatchString(snapshot.SHA256) {
-				return errors.New("lifecycle snapshot digest is invalid")
 			}
 			digest, err := hashRegularFile(snapshot.Backup, snapshot.Mode&0o100 != 0)
 			if err != nil || digest != snapshot.SHA256 {
@@ -713,7 +757,7 @@ func writeLifecycleJournal(home string, paths LifecyclePaths, journal LifecycleJ
 	}
 	if journal.Phase == LifecycleIntent {
 		transactionRoot := paths.LifecycleTransactionRoot(journal.TransactionID)
-		if err := os.MkdirAll(transactionRoot, 0o700); err != nil {
+		if err := mkdirAllDurable(transactionRoot, 0o700); err != nil {
 			return fmt.Errorf("create lifecycle transaction root: %w", err)
 		}
 		if err := validateOwnedDirectory(transactionRoot); err != nil {
@@ -753,7 +797,7 @@ func drainLifecycleAudit(home string, paths LifecyclePaths, journal *LifecycleJo
 	if err := validateLifecyclePathBoundary(home, paths); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(paths.LifecycleAudit), 0o700); err != nil {
+	if err := mkdirAllDurable(filepath.Dir(paths.LifecycleAudit), 0o700); err != nil {
 		return fmt.Errorf("create lifecycle audit directory: %w", err)
 	}
 	lock, err := AcquireInstallLock(paths.LifecycleAuditLock)
@@ -794,6 +838,10 @@ func drainLifecycleAudit(home string, paths LifecyclePaths, journal *LifecycleJo
 		if event.Digest != digestBytes(payload) {
 			_ = file.Close()
 			return errors.New("lifecycle audit pending digest mismatch")
+		}
+		if err := validateLifecycleAuditOffset(file, *event.Offset); err != nil {
+			_ = file.Close()
+			return err
 		}
 		if _, err := file.Seek(*event.Offset, io.SeekStart); err != nil {
 			_ = file.Close()
@@ -856,17 +904,37 @@ func openLifecycleAudit(path string) (*os.File, error) {
 }
 
 func appendLifecycleAuditAt(file *os.File, offset int64, payload []byte) error {
-	if err := file.Truncate(offset); err != nil {
-		return fmt.Errorf("truncate lifecycle audit tail: %w", err)
+	if err := validateLifecycleAuditOffset(file, offset); err != nil {
+		return err
 	}
-	if _, err := file.Seek(offset, io.SeekStart); err != nil {
-		return fmt.Errorf("seek lifecycle audit append: %w", err)
-	}
-	if _, err := file.Write(payload); err != nil {
+	written, err := file.WriteAt(payload, offset)
+	if err != nil {
 		return fmt.Errorf("append lifecycle audit: %w", err)
+	}
+	if written != len(payload) {
+		return io.ErrShortWrite
 	}
 	if err := file.Sync(); err != nil {
 		return fmt.Errorf("sync lifecycle audit: %w", err)
+	}
+	stored := make([]byte, len(payload))
+	read, err := file.ReadAt(stored, offset)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return fmt.Errorf("verify lifecycle audit append: %w", err)
+	}
+	if read != len(payload) || !bytes.Equal(stored, payload) {
+		return errors.New("lifecycle audit append verification failed")
+	}
+	return nil
+}
+
+func validateLifecycleAuditOffset(file *os.File, offset int64) error {
+	info, err := file.Stat()
+	if err != nil {
+		return fmt.Errorf("stat lifecycle audit offset: %w", err)
+	}
+	if info.Size() < offset {
+		return errors.New("lifecycle audit is shorter than pending offset")
 	}
 	return nil
 }
@@ -969,17 +1037,36 @@ func (authority LifecycleRecoveryAuthority) Reattest() error {
 	if supervisorDigest != authority.SupervisorConfig.SHA256 {
 		return errors.New("lifecycle supervisor config attestation mismatch")
 	}
+	for _, executable := range []struct {
+		label       string
+		attestation LifecycleFileAttestation
+	}{
+		{label: "podman", attestation: authority.Podman},
+		{label: "systemctl", attestation: authority.Systemctl},
+		{label: "loginctl", attestation: authority.Loginctl},
+	} {
+		digest, err := hashHostExecutable(executable.attestation.Path)
+		if err != nil {
+			return fmt.Errorf("re-attest lifecycle %s: %w", executable.label, err)
+		}
+		if digest != executable.attestation.SHA256 {
+			return fmt.Errorf("lifecycle %s attestation mismatch", executable.label)
+		}
+	}
 	return nil
 }
 
-func lifecycleMaintenanceIdentity(operation LifecycleOperation) (id, reason string, err error) {
-	switch operation {
+func lifecycleMaintenanceIdentity(journal LifecycleJournal) (id, reason string, err error) {
+	if !safeIdentifierPattern.MatchString(journal.TransactionID) {
+		return "", "", errors.New("lifecycle transaction has no maintenance identity")
+	}
+	switch journal.Operation {
 	case LifecycleInstall:
-		return installMaintenanceID, installMaintenanceReason, nil
+		return journal.TransactionID, installMaintenanceReason, nil
 	case LifecycleUninstall:
-		return uninstallMaintenanceID, uninstallMaintenanceReason, nil
+		return journal.TransactionID, uninstallMaintenanceReason, nil
 	case LifecycleRefresh, LifecycleRefreshRecovery:
-		return refreshMaintenanceID, refreshMaintenanceReason, nil
+		return journal.TransactionID, refreshMaintenanceReason, nil
 	default:
 		return "", "", errors.New("lifecycle operation has no maintenance identity")
 	}
@@ -1013,6 +1100,34 @@ func writeLifecycleTransition(home string, paths LifecyclePaths, journal *Lifecy
 	return nil
 }
 
+func writeLifecycleDiagnostic(home string, paths LifecyclePaths, journal *LifecycleJournal, kind LifecycleAuditKind, value string, now time.Time) error {
+	if journal == nil {
+		return errors.New("lifecycle journal is required")
+	}
+	event := LifecycleAuditEvent{
+		EventID: "event-" + fmt.Sprint(journal.Audit.NextSequence), Timestamp: now.UTC(),
+		TransactionID: journal.TransactionID, WorkerID: journal.Identity.WorkerID,
+		Operation: journal.Operation, Phase: journal.Phase, Kind: kind,
+	}
+	switch kind {
+	case AuditError:
+		event.ErrorClass = value
+	case AuditRecovery:
+		event.Disposition = value
+	default:
+		return errors.New("unsupported lifecycle diagnostic kind")
+	}
+	if err := journal.Audit.EnqueueDiagnostic(event); err != nil {
+		return fmt.Errorf("enqueue lifecycle diagnostic audit: %w", err)
+	}
+	journal.UpdatedAt = now.UTC()
+	if err := writeLifecycleJournal(home, paths, *journal); err != nil {
+		return err
+	}
+	_ = drainLifecycleAudit(home, paths, journal)
+	return nil
+}
+
 func newLifecycleJournal(config Config, operation LifecycleOperation, effect ProviderEffect, uninstall *LifecycleUninstallPayload, now time.Time) (LifecycleJournal, error) {
 	home := lifecycleHome(LifecyclePathsFor(config))
 	if err := config.Validate(home); err != nil {
@@ -1025,6 +1140,18 @@ func newLifecycleJournal(config Config, operation LifecycleOperation, effect Pro
 	supervisorDigest, err := hashRegularFile(config.SupervisorConfigPath, false)
 	if err != nil {
 		return LifecycleJournal{}, fmt.Errorf("attest lifecycle supervisor config: %w", err)
+	}
+	podmanDigest, err := hashHostExecutable(config.PodmanPath)
+	if err != nil {
+		return LifecycleJournal{}, fmt.Errorf("attest lifecycle podman: %w", err)
+	}
+	systemctlDigest, err := hashHostExecutable(config.SystemctlPath)
+	if err != nil {
+		return LifecycleJournal{}, fmt.Errorf("attest lifecycle systemctl: %w", err)
+	}
+	loginctlDigest, err := hashHostExecutable(config.LoginctlPath)
+	if err != nil {
+		return LifecycleJournal{}, fmt.Errorf("attest lifecycle loginctl: %w", err)
 	}
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -1043,6 +1170,9 @@ func newLifecycleJournal(config Config, operation LifecycleOperation, effect Pro
 			Config:           config,
 			ComputeAgent:     LifecycleFileAttestation{Path: config.ComputeAgentPath, SHA256: computeAgentDigest},
 			SupervisorConfig: LifecycleFileAttestation{Path: config.SupervisorConfigPath, SHA256: supervisorDigest},
+			Podman:           LifecycleFileAttestation{Path: config.PodmanPath, SHA256: podmanDigest},
+			Systemctl:        LifecycleFileAttestation{Path: config.SystemctlPath, SHA256: systemctlDigest},
+			Loginctl:         LifecycleFileAttestation{Path: config.LoginctlPath, SHA256: loginctlDigest},
 		},
 		Uninstall: uninstall,
 		Audit:     LifecycleAuditQueue{NextSequence: 1},
@@ -1088,6 +1218,9 @@ func (installer Installer) recoverLifecycleTransaction(ctx context.Context, home
 			return nil
 		}
 		return installer.adoptLegacyProviderTransaction(ctx, home, paths, refresher, nil, "")
+	}
+	if err := writeLifecycleDiagnostic(home, paths, &journal, AuditRecovery, "resume_"+string(journal.Phase), installer.now()); err != nil {
+		return fmt.Errorf("record lifecycle recovery disposition: %w", err)
 	}
 	if err := journal.Recovery.Reattest(); err != nil {
 		return err
@@ -1181,14 +1314,15 @@ func (installer Installer) recoverLifecycleAdopting(ctx context.Context, home st
 	if err := validateLifecycleProviderMatrix(paths, *journal); err != nil {
 		return err
 	}
-	id, reason, err := lifecycleMaintenanceIdentity(journal.Operation)
+	id, reason, err := lifecycleMaintenanceIdentity(*journal)
 	if err != nil {
 		return err
 	}
-	if err := installer.beginMaintenance(ctx, journal.Recovery.Config, id, reason); err != nil {
+	maintenance, err := installer.beginMaintenance(ctx, journal.Recovery.Config, id, reason)
+	if err != nil {
 		return fmt.Errorf("establish legacy recovery maintenance fence: %w", err)
 	}
-	if err := installer.waitLocalState(ctx, journal.Recovery.Config, "unavailable"); err != nil {
+	if err := installer.waitLocalStateAfter(ctx, journal.Recovery.Config, "unavailable", maintenance.StartedAt); err != nil {
 		return fmt.Errorf("drain legacy recovery maintenance fence: %w", err)
 	}
 	if err := writeLifecycleTransition(home, paths, journal, LifecycleFenced, "", installer.now()); err != nil {
@@ -1303,15 +1437,16 @@ func replaceLifecycleAttestation(attestations []LifecycleFileAttestation, path s
 }
 
 func (installer Installer) recoverLifecycleFencing(ctx context.Context, home string, paths LifecyclePaths, journal *LifecycleJournal) error {
-	id, reason, err := lifecycleMaintenanceIdentity(journal.Operation)
+	id, reason, err := lifecycleMaintenanceIdentity(*journal)
 	if err != nil {
 		return err
 	}
 	config := journal.Recovery.Config
-	if err := installer.beginMaintenance(ctx, config, id, reason); err != nil {
+	maintenance, err := installer.beginMaintenance(ctx, config, id, reason)
+	if err != nil {
 		return fmt.Errorf("establish lifecycle maintenance fence: %w", err)
 	}
-	if err := installer.waitLocalState(ctx, config, "unavailable"); err != nil {
+	if err := installer.waitLocalStateAfter(ctx, config, "unavailable", maintenance.StartedAt); err != nil {
 		return fmt.Errorf("drain lifecycle maintenance fence: %w", err)
 	}
 	journal.ProviderTransaction = nil
@@ -1322,15 +1457,16 @@ func (installer Installer) recoverLifecycleFencing(ctx context.Context, home str
 }
 
 func (installer Installer) recoverLifecycleFenced(ctx context.Context, home string, paths LifecyclePaths, journal *LifecycleJournal, refresher Refresher) error {
-	id, reason, err := lifecycleMaintenanceIdentity(journal.Operation)
+	id, reason, err := lifecycleMaintenanceIdentity(*journal)
 	if err != nil {
 		return err
 	}
 	config := journal.Recovery.Config
-	if err := installer.beginMaintenance(ctx, config, id, reason); err != nil {
+	maintenance, err := installer.beginMaintenance(ctx, config, id, reason)
+	if err != nil {
 		return fmt.Errorf("re-establish fenced lifecycle maintenance: %w", err)
 	}
-	if err := installer.waitLocalState(ctx, config, "unavailable"); err != nil {
+	if err := installer.waitLocalStateAfter(ctx, config, "unavailable", maintenance.StartedAt); err != nil {
 		return fmt.Errorf("re-drain fenced lifecycle maintenance: %w", err)
 	}
 	if err := installer.reattestLifecycleAuthority(ctx, home, *journal); err != nil {
@@ -1342,16 +1478,16 @@ func (installer Installer) recoverLifecycleFenced(ctx context.Context, home stri
 	if err := validateLifecycleWiringVector(*journal, paths, lifecycleWiringMixed); err != nil {
 		return err
 	}
-	if err := installer.systemctl(ctx, "stop", config.AgentUnit); err != nil {
+	if err := installer.systemctl(ctx, config.SystemctlPath, "stop", config.AgentUnit); err != nil {
 		return fmt.Errorf("stop fenced lifecycle agent: %w", err)
 	}
-	inner, found, err := readTransactionJournal(paths.Journal)
+	inner, found, err := readTransactionJournalForConfig(paths.Journal, config)
 	if err != nil {
 		return fmt.Errorf("read fenced provider transaction: %w", err)
 	}
 	if found {
 		activeChanged := false
-		if active, activeFound, activeErr := readActiveState(paths.ActiveState); activeErr != nil {
+		if active, activeFound, activeErr := readActiveStateForConfig(paths.ActiveState, config); activeErr != nil {
 			return fmt.Errorf("read fenced provider active state: %w", activeErr)
 		} else if activeFound {
 			activeChanged = active.Current.ImageID == inner.Candidate.ImageID && active.Current.ImageRef == inner.Candidate.ImageRef
@@ -1370,8 +1506,25 @@ func (installer Installer) recoverLifecycleFenced(ctx context.Context, home stri
 	} else if remains {
 		return errors.New("fenced provider transaction remains after rollback")
 	}
+	if journal.Operation == LifecycleRefresh && journal.ProviderEffect == ProviderUnchanged {
+		if journal.Unchanged == nil {
+			return errors.New("fenced unchanged refresh has no provider provenance")
+		}
+		if err := installer.systemctl(ctx, config.SystemctlPath, "restart", providerServiceUnit); err != nil {
+			return fmt.Errorf("restart provider during fenced TLS recovery: %w", err)
+		}
+		if err := refresher.probeStableActive(ctx, config, paths, journal.Unchanged.Active); err != nil {
+			return fmt.Errorf("probe provider during fenced TLS recovery: %w", err)
+		}
+		journal.Unchanged.StableProbeAt = installer.now()
+		journal.UpdatedAt = installer.now()
+		if err := writeLifecycleJournal(home, paths, *journal); err != nil {
+			return fmt.Errorf("record recovered provider TLS readiness: %w", err)
+		}
+	}
+	agentRestartedAfter := installer.now()
 	if len(journal.Snapshots) > 0 || len(journal.PreviousUnits) > 0 || journal.Activation != (systemdActivation{}) {
-		if err := installer.rollbackInstallBeforeStart(ctx, config, journal.Snapshots, journal.PreviousUnits, true, false, id, journal.Activation, func(recoveryContext context.Context) error {
+		if err := installer.rollbackInstallBeforeStart(ctx, config, journal.Snapshots, journal.PreviousUnits, true, false, id, reason, journal.Activation, func(recoveryContext context.Context) error {
 			return installer.reattestLifecycleAuthority(recoveryContext, home, *journal)
 		}); err != nil {
 			return fmt.Errorf("rollback fenced lifecycle wiring: %w", err)
@@ -1379,19 +1532,15 @@ func (installer Installer) recoverLifecycleFenced(ctx context.Context, home stri
 		if err := validateLifecycleWiringVector(*journal, paths, lifecycleWiringPre); err != nil {
 			return fmt.Errorf("verify rolled back lifecycle wiring: %w", err)
 		}
-		journal.Snapshots = nil
-		journal.WiringIntent = nil
-		journal.PreviousUnits = nil
-		journal.Activation = systemdActivation{}
 	} else {
 		if err := installer.reattestLifecycleAuthority(ctx, home, *journal); err != nil {
 			return err
 		}
-		if err := installer.systemctl(ctx, "start", config.AgentUnit); err != nil {
+		if err := installer.systemctl(ctx, config.SystemctlPath, "start", config.AgentUnit); err != nil {
 			return fmt.Errorf("restart fenced lifecycle agent: %w", err)
 		}
 	}
-	if err := installer.waitLocalState(ctx, config, "unavailable"); err != nil {
+	if err := installer.waitLocalStateAfter(ctx, config, "unavailable", agentRestartedAfter); err != nil {
 		return fmt.Errorf("observe restarted fenced lifecycle agent: %w", err)
 	}
 	journal.ProviderTransaction = nil
@@ -1402,7 +1551,7 @@ func (installer Installer) recoverLifecycleFenced(ctx context.Context, home stri
 }
 
 func validateLifecycleProviderMatrix(paths LifecyclePaths, outer LifecycleJournal) error {
-	inner, found, err := readTransactionJournal(paths.Journal)
+	inner, found, err := readTransactionJournalForConfig(paths.Journal, outer.Recovery.Config)
 	if err != nil {
 		return fmt.Errorf("read lifecycle provider transaction: %w", err)
 	}
@@ -1440,6 +1589,14 @@ func validateLifecycleProviderMatrix(paths LifecyclePaths, outer LifecycleJourna
 		return errors.New("lifecycle changed commit requires a provider transaction")
 	}
 	if outer.ProviderTransaction == nil {
+		if outer.Phase == LifecycleFenced && inner.DeferredCommit &&
+			inner.OuterTransactionID == outer.TransactionID && inner.ProfileID == outer.Identity.ProfileID {
+			update := inner.Candidate.Update
+			if update.WorkerID != outer.Identity.WorkerID || update.PluginID != outer.Identity.PluginID || update.ComponentID != outer.Identity.ComponentID {
+				return errors.New("reciprocally bound provider transaction identity mismatch")
+			}
+			return nil
+		}
 		return errors.New("lifecycle changed provider transaction binding is absent")
 	}
 	binding := outer.ProviderTransaction
@@ -1469,7 +1626,7 @@ func validateLifecycleProviderMatrix(paths LifecyclePaths, outer LifecycleJourna
 }
 
 func (installer Installer) recoverLifecycleRelease(ctx context.Context, home string, paths LifecyclePaths, journal *LifecycleJournal, refresher Refresher) error {
-	id, reason, err := lifecycleMaintenanceIdentity(journal.Operation)
+	id, reason, err := lifecycleMaintenanceIdentity(*journal)
 	if err != nil {
 		return err
 	}
@@ -1497,7 +1654,7 @@ func (installer Installer) recoverLifecycleRelease(ctx context.Context, home str
 	}
 	switch classifyMaintenanceState(state, journal.Identity.ProfileID, id, reason) {
 	case maintenanceExactActive:
-		if err := installer.waitLocalDrained(ctx, journal.Recovery.Config); err != nil {
+		if err := installer.waitLocalDrainedAfter(ctx, journal.Recovery.Config, state.Maintenance.StartedAt); err != nil {
 			return fmt.Errorf("wait for lifecycle maintenance drain: %w", err)
 		}
 		if err := installer.releaseLifecycleMaintenance(ctx, home, *journal); err != nil {
@@ -1527,7 +1684,7 @@ func finalizeLifecycleTransaction(home string, paths LifecyclePaths, journal *Li
 		return errors.New("lifecycle transaction is not committed")
 	}
 	if journal.Outcome == LifecycleCommit && journal.ProviderEffect == ProviderChanged {
-		if _, found, err := readTransactionJournal(paths.Journal); err != nil {
+		if _, found, err := readTransactionJournalForConfig(paths.Journal, journal.Recovery.Config); err != nil {
 			return fmt.Errorf("read committed provider transaction: %w", err)
 		} else if found {
 			if err := refresher.finalizeDeferredRefresh(journal.Recovery.Config); err != nil {

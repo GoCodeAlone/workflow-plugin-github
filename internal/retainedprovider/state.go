@@ -62,6 +62,13 @@ func (update VerifiedUpdate) Validate() error {
 	return nil
 }
 
+func (update VerifiedUpdate) validateConfigIdentity(config Config) error {
+	if update.WorkerID != config.WorkerID || update.PluginID != config.PluginID || update.ComponentID != config.ComponentID {
+		return fmt.Errorf("provider update identity does not match retained config")
+	}
+	return nil
+}
+
 type ImageSelection struct {
 	Update      VerifiedUpdate `json:"update"`
 	ImageID     string         `json:"image_id"`
@@ -114,21 +121,43 @@ func (state ActiveState) Validate() error {
 	return nil
 }
 
+func (state ActiveState) ValidateForConfig(config Config) error {
+	if err := state.Validate(); err != nil {
+		return err
+	}
+	if err := state.Current.Update.validateConfigIdentity(config); err != nil {
+		return fmt.Errorf("current: %w", err)
+	}
+	if state.Previous != nil {
+		if err := state.Previous.Update.validateConfigIdentity(config); err != nil {
+			return fmt.Errorf("previous: %w", err)
+		}
+	}
+	return nil
+}
+
 type JournalPhase string
 
 const (
-	JournalPrepared       JournalPhase = "prepared"
-	JournalStatePromoting JournalPhase = "state_promoting"
-	JournalStatePromoted  JournalPhase = "state_promoted"
-	JournalActivated      JournalPhase = "activated"
-	JournalCommitted      JournalPhase = "committed"
+	JournalStaging           JournalPhase = "staging"
+	JournalPrepared          JournalPhase = "prepared"
+	JournalStatePromoting    JournalPhase = "state_promoting"
+	JournalStateDetached     JournalPhase = "state_detached"
+	JournalStatePromoted     JournalPhase = "state_promoted"
+	JournalActivated         JournalPhase = "activated"
+	JournalCommitted         JournalPhase = "committed"
+	JournalRollbackRestoring JournalPhase = "rollback_restoring"
+	JournalRollbackRestored  JournalPhase = "rollback_restored"
+	JournalRollbackCleaned   JournalPhase = "rollback_cleaned"
 )
 
 type TransactionJournal struct {
 	ProtocolVersion    string         `json:"protocol_version"`
 	ID                 string         `json:"id"`
 	Phase              JournalPhase   `json:"phase"`
+	RollbackFrom       JournalPhase   `json:"rollback_from,omitempty"`
 	DeferredCommit     bool           `json:"deferred_commit,omitempty"`
+	RuntimeRepair      bool           `json:"runtime_repair,omitempty"`
 	OuterTransactionID string         `json:"outer_transaction_id,omitempty"`
 	ProfileID          string         `json:"profile_id,omitempty"`
 	Previous           *ActiveState   `json:"previous,omitempty"`
@@ -148,24 +177,91 @@ func (journal TransactionJournal) Validate() error {
 	if bound && (!journal.DeferredCommit || !safeIdentifierPattern.MatchString(journal.OuterTransactionID) || !safeIdentifierPattern.MatchString(journal.ProfileID)) {
 		return fmt.Errorf("outer transaction binding is invalid")
 	}
+	rollbackPhase := isRollbackPhase(journal.Phase)
 	switch journal.Phase {
-	case JournalPrepared, JournalStatePromoting, JournalStatePromoted, JournalActivated, JournalCommitted:
+	case JournalStaging, JournalPrepared, JournalStatePromoting, JournalStateDetached, JournalStatePromoted, JournalActivated, JournalCommitted,
+		JournalRollbackRestoring, JournalRollbackRestored, JournalRollbackCleaned:
 	default:
 		return fmt.Errorf("phase is invalid")
+	}
+	if rollbackPhase {
+		if !isRollbackOrigin(journal.RollbackFrom) {
+			return fmt.Errorf("rollback_from must identify a non-terminal forward phase")
+		}
+	} else if journal.RollbackFrom != "" {
+		return fmt.Errorf("forward phase must not contain rollback_from")
+	}
+	effectivePhase := journal.Phase
+	if rollbackPhase {
+		effectivePhase = journal.RollbackFrom
 	}
 	if journal.Previous != nil {
 		if err := journal.Previous.Validate(); err != nil {
 			return fmt.Errorf("previous: %w", err)
 		}
 	}
-	if err := journal.Candidate.Validate(); err != nil {
+	if effectivePhase == JournalStaging {
+		if err := journal.Candidate.Update.Validate(); err != nil {
+			return fmt.Errorf("candidate update: %w", err)
+		}
+		if journal.Candidate.ImageID != "" || journal.Candidate.ImageRef != "" || !journal.Candidate.ActivatedAt.IsZero() {
+			return fmt.Errorf("staging candidate must not contain image activation state")
+		}
+	} else if err := journal.Candidate.Validate(); err != nil {
 		return fmt.Errorf("candidate: %w", err)
 	}
-	if journal.Previous != nil && (journal.Candidate.ImageID == journal.Previous.Current.ImageID || journal.Candidate.ImageRef == journal.Previous.Current.ImageRef) {
-		return fmt.Errorf("candidate image must differ from the active image")
+	if journal.Previous != nil {
+		if journal.RuntimeRepair {
+			if journal.Candidate.Update.SHA256 != journal.Previous.Current.Update.SHA256 {
+				return fmt.Errorf("runtime repair candidate must match the active update")
+			}
+		} else if journal.Candidate.Update.SHA256 == journal.Previous.Current.Update.SHA256 {
+			return fmt.Errorf("candidate update must differ from the active update")
+		}
+		if !journal.RuntimeRepair && effectivePhase != JournalStaging && (journal.Candidate.ImageID == journal.Previous.Current.ImageID || journal.Candidate.ImageRef == journal.Previous.Current.ImageRef) {
+			return fmt.Errorf("candidate image must differ from the active image")
+		}
+	} else if journal.RuntimeRepair {
+		return fmt.Errorf("runtime repair requires previous active state")
 	}
 	if journal.StartedAt.IsZero() || journal.UpdatedAt.IsZero() || journal.UpdatedAt.Before(journal.StartedAt) {
 		return fmt.Errorf("journal timestamps are invalid")
+	}
+	return nil
+}
+
+func isRollbackPhase(phase JournalPhase) bool {
+	switch phase {
+	case JournalRollbackRestoring, JournalRollbackRestored, JournalRollbackCleaned:
+		return true
+	default:
+		return false
+	}
+}
+
+func isRollbackOrigin(phase JournalPhase) bool {
+	switch phase {
+	case JournalStaging, JournalPrepared, JournalStatePromoting, JournalStateDetached, JournalStatePromoted, JournalActivated:
+		return true
+	default:
+		return false
+	}
+}
+
+func (journal TransactionJournal) ValidateForConfig(config Config) error {
+	if err := journal.Validate(); err != nil {
+		return err
+	}
+	if err := journal.Candidate.Update.validateConfigIdentity(config); err != nil {
+		return fmt.Errorf("candidate: %w", err)
+	}
+	if journal.Previous != nil {
+		if err := journal.Previous.ValidateForConfig(config); err != nil {
+			return fmt.Errorf("previous: %w", err)
+		}
+	}
+	if journal.ProfileID != "" && journal.ProfileID != config.ProfileID {
+		return fmt.Errorf("profile identity does not match retained config")
 	}
 	return nil
 }
@@ -185,7 +281,10 @@ func RecoverActiveState(journal TransactionJournal) (ActiveState, error) {
 		Current:         journal.Candidate,
 		UpdatedAt:       journal.UpdatedAt,
 	}
-	if journal.Previous != nil {
+	if journal.RuntimeRepair && journal.Previous != nil && journal.Previous.Previous != nil {
+		previous := *journal.Previous.Previous
+		recovered.Previous = &previous
+	} else if !journal.RuntimeRepair && journal.Previous != nil {
 		previous := journal.Previous.Current
 		recovered.Previous = &previous
 	}

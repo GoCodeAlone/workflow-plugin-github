@@ -15,26 +15,26 @@ import (
 func TestRecoverReadyLifecycleReleasesForwardWithoutRefencing(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
-		status      func(Config) []byte
+		status      func(Config, LifecycleJournal) []byte
 		wantErr     string
 		wantEnd     bool
 		wantCleanup bool
 	}{
 		{
 			name: "exact active",
-			status: func(config Config) []byte {
-				return maintenanceStateJSON(true, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason)
+			status: func(config Config, journal LifecycleJournal) []byte {
+				return maintenanceStateJSON(true, journal.TransactionID, config.ProfileID, refreshMaintenanceReason)
 			},
 			wantEnd: true, wantCleanup: true,
 		},
 		{
 			name:        "already inactive",
-			status:      func(Config) []byte { return []byte(`{"active":false,"durable":true}`) },
+			status:      func(Config, LifecycleJournal) []byte { return []byte(`{"active":false,"durable":true}`) },
 			wantCleanup: true,
 		},
 		{
 			name: "conflicting active",
-			status: func(config Config) []byte {
+			status: func(config Config, _ LifecycleJournal) []byte {
 				return maintenanceStateJSON(true, "other-transaction", config.ProfileID, refreshMaintenanceReason)
 			},
 			wantErr: "conflicting",
@@ -65,11 +65,11 @@ func TestRecoverReadyLifecycleReleasesForwardWithoutRefencing(t *testing.T) {
 				case "agent-signature":
 					return agentUnitSystemdOutputForTest(t, config), nil
 				case "maintenance-status":
-					return tc.status(config), nil
+					return tc.status(config, journal), nil
 				case "local-status":
 					return localStatusJSON(config.WorkerID, "unavailable"), nil
 				case "maintenance-end":
-					return maintenanceStateJSON(false, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+					return maintenanceStateJSON(false, journal.TransactionID, config.ProfileID, refreshMaintenanceReason), nil
 				default:
 					return nil, nil
 				}
@@ -104,6 +104,96 @@ func TestRecoverReadyLifecycleReleasesForwardWithoutRefencing(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRecoverCommittedLifecycleAfterTransactionRootCleanup(t *testing.T) {
+	home, paths, journal := committedLifecycleCleanupJournalForTest(t)
+	transactionRoot := paths.LifecycleTransactionRoot(journal.TransactionID)
+	if err := os.RemoveAll(transactionRoot); err != nil {
+		t.Fatalf("simulate completed transaction-root cleanup: %v", err)
+	}
+
+	persisted, found, err := readLifecycleJournal(home, paths)
+	if err != nil || !found {
+		t.Fatalf("read committed cleanup journal found=%v err=%v", found, err)
+	}
+	if err := finishLifecycleTransaction(home, paths, &persisted); err != nil {
+		t.Fatalf("finish committed cleanup recovery: %v", err)
+	}
+	if _, found, err := readLifecycleJournal(home, paths); err != nil || found {
+		t.Fatalf("terminal journal found=%v err=%v", found, err)
+	}
+}
+
+func TestRecoverCommittedLifecycleAfterPartialTransactionRootCleanup(t *testing.T) {
+	home, paths, journal := committedLifecycleCleanupJournalForTest(t)
+	removed := ""
+	for _, snapshot := range journal.Snapshots {
+		if snapshot.Existed {
+			removed = snapshot.Backup
+			if err := os.Remove(snapshot.Backup); err != nil {
+				t.Fatalf("simulate partial transaction-root cleanup: %v", err)
+			}
+			break
+		}
+	}
+	if removed == "" {
+		t.Fatal("cleanup fixture has no existing snapshot backup")
+	}
+	if _, err := os.Stat(paths.LifecycleTransactionRoot(journal.TransactionID)); err != nil {
+		t.Fatalf("partial cleanup removed transaction root: %v", err)
+	}
+
+	persisted, found, err := readLifecycleJournal(home, paths)
+	if err != nil || !found {
+		t.Fatalf("read partially cleaned committed journal found=%v err=%v", found, err)
+	}
+	if err := finishLifecycleTransaction(home, paths, &persisted); err != nil {
+		t.Fatalf("finish partial committed cleanup recovery: %v", err)
+	}
+}
+
+func committedLifecycleCleanupJournalForTest(t *testing.T) (string, LifecyclePaths, LifecycleJournal) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".state"))
+	config := validTestConfig(home)
+	writeLifecycleRecoveryFiles(t, config)
+	paths := LifecyclePathsFor(config)
+	if err := AtomicWriteJSON(paths.ConfigFile, config); err != nil {
+		t.Fatalf("write installed config: %v", err)
+	}
+	now := time.Unix(1_700_800_000, 0).UTC()
+	journal := lifecycleRecoveryJournalForTest(t, config, now)
+	if err := writeLifecycleJournal(home, paths, journal); err != nil {
+		t.Fatalf("write intent journal: %v", err)
+	}
+	journal.Phase = LifecycleFencing
+	if err := writeLifecycleJournal(home, paths, journal); err != nil {
+		t.Fatalf("write fencing journal: %v", err)
+	}
+	if err := snapshotManagedFilesForLifecycle(home, paths, &journal, now.Add(time.Second)); err != nil {
+		t.Fatalf("snapshot lifecycle files: %v", err)
+	}
+	units, err := RenderSystemdUnits(config, paths)
+	if err != nil {
+		t.Fatalf("render systemd units: %v", err)
+	}
+	journal.WiringIntent = managedWiringIntent(paths, units, true)
+	intended := journal.Recovery.AgentUnitBefore
+	journal.AgentUnitIntended = &intended
+	journal.ProviderTransaction = &LifecycleProviderTransaction{
+		TransactionID: "provider-transaction-123",
+		ProfileID:     config.ProfileID,
+		Digest:        "sha256:" + strings.Repeat("d", 64),
+	}
+	journal.Phase = LifecycleCommitted
+	journal.Outcome = LifecycleCommit
+	journal.UpdatedAt = now.Add(2 * time.Second)
+	if err := writeLifecycleJournal(home, paths, journal); err != nil {
+		t.Fatalf("write committed journal: %v", err)
+	}
+	return home, paths, journal
 }
 
 func TestRecoverLifecycleReattestsJournalAuthorityBeforeCommands(t *testing.T) {
@@ -156,7 +246,7 @@ func TestRecoverFencedLifecycleReattestsAfterDrainBeforeStop(t *testing.T) {
 		case "agent-signature":
 			return agentUnitSystemdOutputForTest(t, config), nil
 		case "maintenance-begin":
-			return maintenanceStateJSON(true, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+			return maintenanceStateJSON(true, adjacentArgValue(command.Args, "-id"), config.ProfileID, refreshMaintenanceReason), nil
 		case "local-status":
 			if err := os.WriteFile(config.ComputeAgentPath, []byte("replacement during drain"), 0o700); err != nil {
 				t.Fatalf("replace compute-agent during drain: %v", err)
@@ -177,6 +267,56 @@ func TestRecoverFencedLifecycleReattestsAfterDrainBeforeStop(t *testing.T) {
 	if _, found, readErr := readLifecycleJournal(home, paths); readErr != nil || !found {
 		t.Fatalf("failed recovery lost journal found=%v err=%v", found, readErr)
 	}
+}
+
+func TestRecoverFencedTLSRefreshRestartsAndProbesProviderBeforeAgentRelease(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".state"))
+	config := validTestConfig(home)
+	writeLifecycleRecoveryFiles(t, config)
+	paths := LifecyclePathsFor(config)
+	now := time.Unix(1_700_800_000, 0).UTC()
+	journal := lifecycleRecoveryJournalForTest(t, config, now)
+	journal.Operation = LifecycleRefresh
+	journal.ProviderEffect = ProviderUnchanged
+	setLifecycleUnchangedForTest(&journal, config, now)
+	journal.Phase = LifecycleFenced
+	if err := writeLifecycleJournal(home, paths, journal); err != nil {
+		t.Fatalf("write fenced TLS refresh journal: %v", err)
+	}
+
+	var events []string
+	runner := &recordingCommandRunner{run: func(_ context.Context, command Command) ([]byte, error) {
+		switch {
+		case filepath.Base(command.Path) == "systemctl" && containsAdjacentArgs(command.Args, "restart", providerServiceUnit):
+			events = append(events, "provider-restart")
+			return nil, nil
+		case filepath.Base(command.Path) == "systemctl" && containsArg(command.Args, providerServiceUnit) && containsAdjacentArgs(command.Args, "--property", "ActiveState"):
+			return []byte("active\n"), nil
+		case isProbeFor(command, config.StableContainer):
+			events = append(events, "provider-probe")
+			return nil, nil
+		}
+		switch installCommandEvent(command, config) {
+		case "agent-signature":
+			return agentUnitSystemdOutputForTest(t, config), nil
+		case "maintenance-begin", "maintenance-status":
+			return maintenanceStateJSON(true, journal.TransactionID, config.ProfileID, refreshMaintenanceReason), nil
+		case "local-status":
+			return localStatusJSON(config.WorkerID, "unavailable"), nil
+		case "agent-start":
+			events = append(events, "agent-start")
+		case "maintenance-end":
+			events = append(events, "maintenance-end")
+			return maintenanceStateJSON(false, journal.TransactionID, config.ProfileID, refreshMaintenanceReason), nil
+		}
+		return nil, nil
+	}}
+	installer := Installer{Runner: runner, Now: func() time.Time { return now.Add(time.Minute) }, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if err := installer.recoverLifecycleTransaction(t.Context(), home, paths, Refresher{Runner: runner, Now: installer.Now, Sleep: installer.Sleep}); err != nil {
+		t.Fatalf("recover fenced TLS refresh: %v", err)
+	}
+	assertOrderedEvents(t, events, []string{"provider-restart", "provider-probe", "agent-start", "maintenance-end"})
 }
 
 func TestRecoverLifecycleRejectsChangedEffectiveAgentUnitBeforeMutation(t *testing.T) {
@@ -276,8 +416,8 @@ func TestRecoverLifecycleRejectsMismatchedProviderTransactionBeforeCommands(t *t
 	}
 }
 
-func TestRecoverFencedLifecycleRollsBackEveryBoundProviderPhase(t *testing.T) {
-	for _, phase := range []JournalPhase{JournalPrepared, JournalStatePromoting, JournalStatePromoted, JournalActivated, JournalCommitted} {
+func TestRecoverFencedLifecycleRollsBackEveryReciprocallyBoundProviderPhase(t *testing.T) {
+	for _, phase := range []JournalPhase{JournalStaging, JournalPrepared, JournalStatePromoting, JournalStateDetached, JournalStatePromoted, JournalActivated, JournalCommitted} {
 		t.Run(string(phase), func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".state"))
@@ -296,16 +436,31 @@ func TestRecoverFencedLifecycleRollsBackEveryBoundProviderPhase(t *testing.T) {
 			payload := writeTestProviderPayload(t, home, "outer-candidate-"+string(phase))
 			digest := fileDigestForTest(t, payload)
 			candidate := selectionForDigest(payload, digest, "v1.0.32", "outer-directive-"+string(phase), "sha256:"+strings.Repeat("e", 64), now)
-			if err := prepareCandidateState(paths.ProviderState, paths.CandidateState(digest)); err != nil {
-				t.Fatalf("prepare candidate state: %v", err)
-			}
-			if err := os.WriteFile(filepath.Join(paths.CandidateState(digest), "generation"), []byte("candidate"), 0o600); err != nil {
-				t.Fatalf("write candidate provider state: %v", err)
+			journalCandidate := candidate
+			if phase == JournalStaging {
+				journalCandidate = ImageSelection{Update: candidate.Update}
+				if err := mkdirAllDurable(paths.PackageDir(digest), 0o700); err != nil {
+					t.Fatalf("create staged package: %v", err)
+				}
+				if err := os.WriteFile(paths.PackageBinary(digest), []byte("candidate"), 0o700); err != nil {
+					t.Fatalf("write staged package: %v", err)
+				}
+			} else {
+				if err := prepareCandidateState(paths.ProviderState, paths.CandidateState(digest)); err != nil {
+					t.Fatalf("prepare candidate state: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(paths.CandidateState(digest), "generation"), []byte("candidate"), 0o600); err != nil {
+					t.Fatalf("write candidate provider state: %v", err)
+				}
 			}
 			switch phase {
 			case JournalStatePromoting:
 				if err := os.Rename(paths.ProviderState, paths.PreviousState(digest)); err != nil {
 					t.Fatalf("simulate state promoting: %v", err)
+				}
+			case JournalStateDetached:
+				if err := detachProviderState(paths, digest); err != nil {
+					t.Fatalf("simulate detached provider state: %v", err)
 				}
 			case JournalStatePromoted, JournalActivated, JournalCommitted:
 				if err := promoteCandidateProviderState(paths, digest); err != nil {
@@ -326,9 +481,8 @@ func TestRecoverFencedLifecycleRollsBackEveryBoundProviderPhase(t *testing.T) {
 				ProtocolVersion: TransactionJournalProtocolVersion,
 				ID:              "provider-transaction-" + string(phase), Phase: phase, DeferredCommit: true,
 				OuterTransactionID: outer.TransactionID, ProfileID: config.ProfileID,
-				Previous: &previous, Candidate: candidate, StartedAt: now, UpdatedAt: now,
+				Previous: &previous, Candidate: journalCandidate, StartedAt: now, UpdatedAt: now,
 			}
-			outer.ProviderTransaction = &LifecycleProviderTransaction{TransactionID: inner.ID, ProfileID: config.ProfileID, Digest: digest}
 			if err := writeLifecycleJournal(home, paths, outer); err != nil {
 				t.Fatalf("write outer intent: %v", err)
 			}
@@ -341,21 +495,23 @@ func TestRecoverFencedLifecycleRollsBackEveryBoundProviderPhase(t *testing.T) {
 			}
 
 			maintenanceActive := false
+			maintenanceID := ""
 			runner := &recordingCommandRunner{run: func(_ context.Context, command Command) ([]byte, error) {
 				switch installCommandEvent(command, config) {
 				case "agent-signature":
 					return agentUnitSystemdOutputForTest(t, config), nil
 				case "maintenance-begin":
 					maintenanceActive = true
-					return maintenanceStateJSON(true, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+					maintenanceID = adjacentArgValue(command.Args, "-id")
+					return maintenanceStateJSON(true, maintenanceID, config.ProfileID, refreshMaintenanceReason), nil
 				case "maintenance-status":
 					if maintenanceActive {
-						return maintenanceStateJSON(true, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+						return maintenanceStateJSON(true, maintenanceID, config.ProfileID, refreshMaintenanceReason), nil
 					}
 					return []byte(`{"active":false,"durable":true}`), nil
 				case "maintenance-end":
 					maintenanceActive = false
-					return maintenanceStateJSON(false, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+					return maintenanceStateJSON(false, maintenanceID, config.ProfileID, refreshMaintenanceReason), nil
 				case "local-status":
 					return localStatusJSON(config.WorkerID, "unavailable"), nil
 				default:
@@ -411,21 +567,26 @@ func TestRecoverFencingAndFencedLifecycleRollsBackBeforeRelease(t *testing.T) {
 			}
 
 			maintenanceActive := false
+			maintenanceID := ""
 			runner := &recordingCommandRunner{run: func(_ context.Context, command Command) ([]byte, error) {
+				if filepath.Base(command.Path) == "systemctl" && containsArg(command.Args, providerServiceUnit) && containsAdjacentArgs(command.Args, "--property", "ActiveState") {
+					return []byte("active\n"), nil
+				}
 				switch installCommandEvent(command, config) {
 				case "agent-signature":
 					return agentUnitSystemdOutputForTest(t, config), nil
 				case "maintenance-begin":
 					maintenanceActive = true
-					return maintenanceStateJSON(true, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+					maintenanceID = adjacentArgValue(command.Args, "-id")
+					return maintenanceStateJSON(true, maintenanceID, config.ProfileID, refreshMaintenanceReason), nil
 				case "maintenance-status":
 					if maintenanceActive {
-						return maintenanceStateJSON(true, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+						return maintenanceStateJSON(true, maintenanceID, config.ProfileID, refreshMaintenanceReason), nil
 					}
 					return []byte(`{"active":false,"durable":true}`), nil
 				case "maintenance-end":
 					maintenanceActive = false
-					return maintenanceStateJSON(false, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+					return maintenanceStateJSON(false, maintenanceID, config.ProfileID, refreshMaintenanceReason), nil
 				case "local-status":
 					return localStatusJSON(config.WorkerID, "unavailable"), nil
 				default:
@@ -448,6 +609,13 @@ func TestRecoverFencingAndFencedLifecycleRollsBackBeforeRelease(t *testing.T) {
 			}
 			if tc.wantStop && !strings.Contains(transcript, "systemctl --user start "+config.AgentUnit) {
 				t.Fatalf("fenced recovery did not restart agent:\n%s", transcript)
+			}
+			if tc.wantStop {
+				for _, required := range []string{"systemctl --user restart " + providerServiceUnit, "probe -url " + config.ProviderURL} {
+					if !strings.Contains(transcript, required) {
+						t.Fatalf("fenced TLS recovery missing %q:\n%s", required, transcript)
+					}
+				}
 			}
 			if _, found, err := readLifecycleJournal(home, paths); err != nil || found {
 				t.Fatalf("recovered journal found=%v err=%v", found, err)
@@ -496,6 +664,7 @@ func TestRecoverLifecycleAdoptsLegacyInnerBeforeMaintenance(t *testing.T) {
 	}
 
 	maintenanceActive := false
+	maintenanceID := ""
 	sawAdopting := false
 	runner := &recordingCommandRunner{run: func(_ context.Context, command Command) ([]byte, error) {
 		switch installCommandEvent(command, config) {
@@ -514,15 +683,16 @@ func TestRecoverLifecycleAdoptsLegacyInnerBeforeMaintenance(t *testing.T) {
 				sawAdopting = true
 			}
 			maintenanceActive = true
-			return maintenanceStateJSON(true, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+			maintenanceID = adjacentArgValue(command.Args, "-id")
+			return maintenanceStateJSON(true, maintenanceID, config.ProfileID, refreshMaintenanceReason), nil
 		case "maintenance-status":
 			if maintenanceActive {
-				return maintenanceStateJSON(true, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+				return maintenanceStateJSON(true, maintenanceID, config.ProfileID, refreshMaintenanceReason), nil
 			}
 			return []byte(`{"active":false,"durable":true}`), nil
 		case "maintenance-end":
 			maintenanceActive = false
-			return maintenanceStateJSON(false, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+			return maintenanceStateJSON(false, maintenanceID, config.ProfileID, refreshMaintenanceReason), nil
 		case "local-status":
 			return localStatusJSON(config.WorkerID, "unavailable"), nil
 		default:
@@ -588,6 +758,9 @@ func writeLifecycleRecoveryFiles(t *testing.T, config Config) {
 	}{
 		{path: config.ComputeAgentPath, mode: 0o700, data: "compute-agent fixture"},
 		{path: config.SupervisorConfigPath, mode: 0o600, data: "supervisor config fixture"},
+		{path: config.PodmanPath, mode: 0o500, data: "podman fixture"},
+		{path: config.SystemctlPath, mode: 0o500, data: "systemctl fixture"},
+		{path: config.LoginctlPath, mode: 0o500, data: "loginctl fixture"},
 		{path: agentUnitFragmentPathForTest(config), mode: 0o600, data: "[Service]\nExecStart=" + config.ComputeAgentPath + " run\n"},
 	} {
 		if err := os.MkdirAll(filepath.Dir(file.path), 0o700); err != nil {
@@ -604,6 +777,43 @@ func writeLifecycleRecoveryFiles(t *testing.T, config Config) {
 	}
 }
 
+func TestLifecycleRecoveryAttestsConfiguredHostExecutables(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	writeLifecycleRecoveryFiles(t, config)
+	journal, err := newLifecycleJournal(config, LifecycleRefresh, ProviderChanged, nil, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("create lifecycle journal: %v", err)
+	}
+	for label, attestation := range map[string]LifecycleFileAttestation{
+		"podman":    journal.Recovery.Podman,
+		"systemctl": journal.Recovery.Systemctl,
+		"loginctl":  journal.Recovery.Loginctl,
+	} {
+		var want string
+		switch label {
+		case "podman":
+			want = config.PodmanPath
+		case "systemctl":
+			want = config.SystemctlPath
+		case "loginctl":
+			want = config.LoginctlPath
+		}
+		if attestation.Path != want || attestation.SHA256 == "" {
+			t.Fatalf("%s attestation = %+v want path %q", label, attestation, want)
+		}
+	}
+	if err := os.Chmod(config.PodmanPath, 0o700); err != nil {
+		t.Fatalf("make podman fixture replaceable: %v", err)
+	}
+	if err := os.WriteFile(config.PodmanPath, []byte("replaced podman"), 0o500); err != nil {
+		t.Fatalf("replace podman fixture: %v", err)
+	}
+	if err := journal.Recovery.Reattest(); err == nil || !strings.Contains(err.Error(), "podman") {
+		t.Fatalf("re-attest replaced podman err = %v", err)
+	}
+}
+
 func lifecycleRecoveryJournalForTest(t *testing.T, config Config, now time.Time) LifecycleJournal {
 	t.Helper()
 	journal := validLifecycleJournalForTest(config, now)
@@ -617,6 +827,17 @@ func lifecycleRecoveryJournalForTest(t *testing.T, config Config, now time.Time)
 	}
 	journal.Recovery.ComputeAgent.SHA256 = computeAgentDigest
 	journal.Recovery.SupervisorConfig.SHA256 = supervisorDigest
+	for label, target := range map[string]*LifecycleFileAttestation{
+		"podman":    &journal.Recovery.Podman,
+		"systemctl": &journal.Recovery.Systemctl,
+		"loginctl":  &journal.Recovery.Loginctl,
+	} {
+		digest, err := hashHostExecutable(target.Path)
+		if err != nil {
+			t.Fatalf("hash %s: %v", label, err)
+		}
+		target.SHA256 = digest
+	}
 	journal.Recovery.AgentUnitBefore = agentUnitSignatureForTest(t, config)
 	return journal
 }
@@ -724,6 +945,44 @@ func TestLifecycleAuditDrainRecoversCompleteAndTornAppend(t *testing.T) {
 				t.Fatalf("audit data = %q err=%v want=%q", data, err, payload)
 			}
 		})
+	}
+}
+
+func TestLifecycleAuditDrainRejectsFileShorterThanDurableOffset(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".state"))
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	now := time.Unix(1_700_800_000, 0).UTC()
+	journal := validLifecycleJournalForTest(config, now)
+	event := LifecycleAuditEvent{
+		EventID: "event-1", Timestamp: now, TransactionID: journal.TransactionID,
+		WorkerID: config.WorkerID, Operation: LifecycleInstall,
+		Phase: LifecycleIntent, Kind: AuditPhase, ProviderEffect: ProviderChanged,
+	}
+	if err := journal.Audit.EnqueueSafety(event); err != nil {
+		t.Fatalf("enqueue safety event: %v", err)
+	}
+	payload, err := lifecycleAuditPayload(journal.Audit.Safety[0])
+	if err != nil {
+		t.Fatalf("audit payload: %v", err)
+	}
+	fixture := []byte("truncated\n")
+	writeAuditFixture(t, paths.LifecycleAudit, fixture)
+	offset := int64(len(fixture) + 32)
+	journal.Audit.Safety[0].Offset = &offset
+	journal.Audit.Safety[0].Digest = digestBytes(payload)
+	if err := writeLifecycleJournal(home, paths, journal); err != nil {
+		t.Fatalf("write lifecycle journal: %v", err)
+	}
+
+	err = drainLifecycleAudit(home, paths, &journal)
+	if err == nil || !strings.Contains(err.Error(), "shorter than pending offset") {
+		t.Fatalf("truncated audit drain err = %v", err)
+	}
+	data, readErr := os.ReadFile(paths.LifecycleAudit)
+	if readErr != nil || !bytes.Equal(data, fixture) {
+		t.Fatalf("truncated audit mutated = %q err=%v", data, readErr)
 	}
 }
 
@@ -908,6 +1167,36 @@ func TestLifecycleAuditEventStrictUnion(t *testing.T) {
 	if err := errorEvent.Validate(); err != nil {
 		t.Fatalf("valid error event: %v", err)
 	}
+
+	recoveryEvent := event
+	recoveryEvent.Kind = AuditRecovery
+	recoveryEvent.Outcome = ""
+	recoveryEvent.ProviderEffect = ""
+	recoveryEvent.Disposition = "resume_fenced"
+	recoveryEvent.Count = 1
+	recoveryEvent.FirstSeen = now
+	recoveryEvent.LastSeen = now
+	if err := recoveryEvent.Validate(); err != nil {
+		t.Fatalf("valid recovery event: %v", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		base   LifecycleAuditEvent
+		mutate func(*LifecycleAuditEvent)
+	}{
+		{name: "phase invalid outcome", base: event, mutate: func(candidate *LifecycleAuditEvent) { candidate.Outcome = "contradictory" }},
+		{name: "phase invalid provider effect", base: event, mutate: func(candidate *LifecycleAuditEvent) { candidate.ProviderEffect = "contradictory" }},
+		{name: "recovery provider effect", base: recoveryEvent, mutate: func(candidate *LifecycleAuditEvent) { candidate.ProviderEffect = ProviderChanged }},
+		{name: "error disposition", base: errorEvent, mutate: func(candidate *LifecycleAuditEvent) { candidate.Disposition = "resume_fenced" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := tc.base
+			tc.mutate(&candidate)
+			if err := candidate.Validate(); err == nil {
+				t.Fatalf("contradictory audit event accepted: %+v", candidate)
+			}
+		})
+	}
 }
 
 func TestLifecycleAuditDiagnosticsCoalesceAndOverflow(t *testing.T) {
@@ -957,7 +1246,9 @@ func TestLifecycleAuditDiagnosticsCoalesceAndOverflow(t *testing.T) {
 	}
 	overflow := base
 	overflow.EventID = "overflow-source-1"
-	overflow.ErrorClass = "beyond-capacity"
+	overflow.Kind = AuditRecovery
+	overflow.ErrorClass = ""
+	overflow.Disposition = "resume_fenced"
 	overflow.Timestamp = now.Add(40 * time.Minute)
 	if err := queue.EnqueueDiagnostic(overflow); err != nil {
 		t.Fatalf("enqueue overflow diagnostic: %v", err)
@@ -1346,6 +1637,9 @@ func validLifecycleJournalForTest(config Config, now time.Time) LifecycleJournal
 			Config:           config,
 			ComputeAgent:     LifecycleFileAttestation{Path: config.ComputeAgentPath, SHA256: "sha256:" + strings.Repeat("a", 64)},
 			SupervisorConfig: LifecycleFileAttestation{Path: config.SupervisorConfigPath, SHA256: "sha256:" + strings.Repeat("b", 64)},
+			Podman:           LifecycleFileAttestation{Path: config.PodmanPath, SHA256: "sha256:" + strings.Repeat("d", 64)},
+			Systemctl:        LifecycleFileAttestation{Path: config.SystemctlPath, SHA256: "sha256:" + strings.Repeat("e", 64)},
+			Loginctl:         LifecycleFileAttestation{Path: config.LoginctlPath, SHA256: "sha256:" + strings.Repeat("f", 64)},
 			AgentUnitBefore: LifecycleSystemdSignature{
 				Fragment:  LifecycleFileAttestation{Path: agentUnitFragmentPathForTest(config), SHA256: "sha256:" + strings.Repeat("c", 64)},
 				ExecStart: staticExecStartForTest(config),

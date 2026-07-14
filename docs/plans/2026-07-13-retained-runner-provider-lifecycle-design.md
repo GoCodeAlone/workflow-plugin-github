@@ -430,7 +430,7 @@ sibling journal. Transient/linked or otherwise unreconstructable systemd state
 is rejected before `fencing`.
 
 The provider subtransaction remains a second file because provider rollback
-already has a five-phase durable protocol, but it is no longer an independent
+already has a durable phase protocol, but it is no longer an independent
 authority. New inner records contain outer transaction id, profile id, and
 candidate digest. The outer record also has typed `provider_effect`:
 `changed|unchanged|not_applicable`. `changed` is phase-relative: inner may be
@@ -449,7 +449,7 @@ fabricating a provider transaction. The accepted matrix is closed:
 |---|---|---|---|
 | `intent`,`fencing` | absent only | absent only | abort before mutation |
 | `adopting` | exact hash-bound legacy inner only for `refresh_recovery` | forbidden | establish/drain fence, then advance |
-| `fenced` | absent or matching deferred `prepared`/`state_promoting`/`state_promoted`/`activated`/`committed` | absent | roll back |
+| `fenced` | absent or matching deferred `staging`/`prepared`/`state_promoting`/`state_detached`/`state_promoted`/`activated`/`committed` or persisted rollback phase | absent | start or resume rollback |
 | `ready`,`releasing` commit+changed | matching deferred `committed` | forbidden | finish forward without re-fence or mutation |
 | `ready`,`releasing` commit+unchanged | absent; verified/active/probed digest bound by outer | forbidden | finish forward without re-fence or mutation |
 | `ready`,`releasing` commit+not_applicable | forbidden | absent; uninstall only | finish forward without re-fence or mutation |
@@ -546,6 +546,57 @@ unattestable identity fails closed into the explicit recovery command. Scope:
 no manifest change; the recovery command is required operational repair for the
 locked lifecycle.
 
+### Backport 2026-07-14: Effective User-Systemd Attestation
+
+Cause: systemd 255 omitted usable `EnvironmentFiles` data from `systemctl show`;
+its `ExecStart` property also included runtime PID/start-time fields, so an
+unchanged stopped unit produced a different signature.
+Change: attest exact owner/identity/size-bounded fragment and drop-in bytes;
+parse reset-aware static `EnvironmentFile` and `ExecStart` directives with
+`go-systemd/unit`; hash the same opened bytes; reject optional, globbed,
+specifier-bearing, relative, or otherwise unattestable environment paths;
+canonicalize the redundant environment-file attestation list while preserving
+ordered fragment/drop-in hashes that bind override semantics.
+Scope: no manifest change.
+Evidence: focused retained-provider tests cover omitted properties, reset
+semantics, quoted paths, unsafe-path rejection, and stopped-unit stability;
+the real Ubuntu 24.04 user manager completed install/uninstall/reinstall with
+stable signatures.
+
+### Backport 2026-07-14: Recurring Refresh Timer
+
+Cause: `OnUnitActiveSec=300s` did not recur for an inactive `Type=oneshot`
+refresh service; the timer became `active (elapsed)` without a next trigger.
+Change: use `OnUnitInactiveSec=300s` so each completed refresh schedules the
+next activation.
+Scope: no manifest change.
+Evidence: rendered-unit regression forbids `OnUnitActiveSec`; the runtime
+timer fired naturally after five minutes, completed successfully, and exposed
+a later next-elapse timestamp.
+
+### Backport 2026-07-14: Literal EnvironmentFile Path Encoding
+
+Cause: generic command quoting rendered `EnvironmentFile="/absolute/path"`;
+systemd treated the quote as part of the path and ignored the file as
+non-absolute.
+Change: encode the absolute path with the systemd path-value encoder and reject
+the quoted form in rendered-unit tests.
+Scope: no manifest change.
+Evidence: the corrected installed drop-in exposed the unquoted absolute path;
+after daemon reload and agent restart, all four expected environment keys were
+present and the user journal had no warnings.
+
+### Backport 2026-07-14: Branch-Wide Static Analysis
+
+Cause: Task 5's first branch-wide lint run found unchecked read-only closes,
+one write-side directory close, deprecated certificate-pool inspection, and
+four helpers made unreachable by the unified lifecycle redesign.
+Change: make close handling explicit, join directory sync/close errors, compare
+certificate pools semantically, and remove only proven-dead helpers.
+Scope: no manifest change; no new product invariant because the existing
+branch-wide lint gate directly detects recurrence.
+Evidence: `golangci-lint run --new-from-rev=origin/main` → `0 issues`.
+
 ## Task 4 Runtime Launch Transcript
 
 Environment: privileged Ubuntu 24.04 arm64 container booted with real user
@@ -593,3 +644,489 @@ installed=true service_active=true; provider-state sentinel unchanged
 Failure-signature scrape: clean from the first successful install onward
 Verdict: PASS for the Task 4 user-systemd/Podman lifecycle boundary
 ```
+
+### Backport 2026-07-14: Active-Only TLS Renewal Inspection
+
+Cause: renewal inspection was added before the refresh state machine separated
+first activation from updates; initial activation then required an active state
+that cannot exist yet and blocked the concurrency test behind its runner gate.
+Change: first activation remains a fenced package mutation with installer
+self-digest verification; TLS renewal inspection runs only when active state
+exists. Refresh fixtures generate real CA/key/server material at the injected
+clock instead of placeholder PEM.
+Scope: no manifest change.
+Evidence: removing the separation makes
+`TestRefreshBuildsAndPreflightsIsolatedCandidateThenStable` fail with `fenced
+refresh requires an active provider`; restored fix plus full retained package
+tests pass in 27.7s.
+
+### Backport 2026-07-14: Current Server-Certificate Validity
+
+Cause: CA validity, signature, key binding, and SAN checks did not reject a
+correctly signed server certificate whose `NotBefore` was still in the future.
+Change: authority inspection fails closed for future-dated server material;
+expired server certificates remain readable so the fenced renewal path can
+replace them atomically.
+Scope: no manifest change.
+Evidence: fix removed → `TestProviderServerCertificateRejectsFutureValidity`
+fails with `err = <nil>`; fix restored → test passes; branch lint → `0 issues`.
+
+### Backport 2026-07-14: Initial Installer Binding Across Marker Reads
+
+Cause: initial refresh verified the signed projection for installer self-digest,
+then read the marker again before staging; a campaign update between reads could
+replace the payload after the self-digest check.
+Change: when no active provider exists, each verified projection used for
+mutation is rebound to the running installer digest before any lifecycle journal,
+maintenance, systemd, or Podman mutation.
+Scope: no manifest change.
+Evidence: fix removed →
+`TestInitialRefreshRevalidatesInstallerAfterVerifiedUpdateChanges` advances into
+runtime mutation; fix restored → exact test passes with two verify calls and no
+other command.
+
+### Backport 2026-07-14: Installed Config Binds Every Mutation
+
+Cause: install accepted a different valid config at the same provider root and
+could orphan the prior agent drop-in/unit/container identity; applying that
+guard only to reinstall left refresh and uninstall asymmetric.
+Change: after recovering any existing lifecycle journal, install, refresh, and
+uninstall require the requested strict config to exactly equal owner-only
+installed `config.json`; only first activation may lack that file.
+Configuration migration requires a separate future transaction.
+Scope: no manifest change.
+Evidence: guard removed →
+`TestReinstallRejectsChangedInstalledConfigBeforeCommands` and
+`TestRefreshAndUninstallRejectChangedInstalledConfigBeforeCommands` reach host
+preflight/verification; restored → changed worker/unit rejected with zero
+commands while same-config credential rotation and uninstall cleanup recovery
+pass.
+
+### Backport 2026-07-14: Fenced TLS Recovery Re-Proves Readiness
+
+Cause: atomic certificate renewal survived crashes but `Fenced +
+ProviderUnchanged` recovery could restart/release the agent without restarting
+or authenticating the provider.
+Change: recovery retains maintenance, restarts provider, performs the real
+stable semantic probe from durable unchanged provenance, records readiness,
+then restarts the same agent and releases maintenance.
+Scope: no manifest change.
+Evidence: recovery branch removed →
+`TestRecoverFencedTLSRefreshRestartsAndProbesProviderBeforeAgentRelease` observes
+only agent start/end; restored → provider restart/probe precede both.
+
+### Backport 2026-07-14: SELinux And Bounded Runtime Retention
+
+Cause: unlabeled bind mounts fail on enforcing SELinux hosts; successful
+campaigns retained all prior package directories and Podman image refs.
+Change: mutable provider state mounts use private `Z`; TLS/CA shared by provider
+and probes use read-only `z`. Post-commit, deferred-finalize, and committed
+recovery GC remove only exact digest-owned image/package pairs image-first,
+retain current+previous, and retry safely after interruption.
+Scope: no manifest change.
+Evidence: mount option removed → isolation test fails on exact volume; GC call
+removed → deferred-finalize test leaves stale package. Full package → PASS.
+
+### Backport 2026-07-14: Config-Probe Validation Symmetry
+
+Cause: lifecycle config/schema accepted non-YAML workflow names and 101-128 byte
+runner/label values rejected by the mandatory provider probe.
+Change: runtime config and shipped schema require `.yml`/`.yaml` plus ≤100-byte
+runner names/labels; the release example passes the runtime decoder.
+Scope: no manifest change.
+Evidence: suffix guard removed → config regression accepts non-YAML workflow;
+restored config and release-contract tests → PASS.
+
+### Backport 2026-07-14: Terminal Cleanup Is Recoverable
+
+Cause: cleanup removed transaction snapshots before the durable committed
+journal; a crash between removals made the remaining journal unreadable.
+Change: only a fully committed journal may validate after any attested backup
+has already been removed, including partial `RemoveAll` progress. Snapshot
+metadata/path constraints remain mandatory; present backups are still
+owner/mode/digest validated; every nonterminal journal requires every backup.
+Scope: no manifest change.
+Evidence: fix removed →
+`TestRecoverCommittedLifecycleAfterTransactionRootCleanup` and
+`TestRecoverCommittedLifecycleAfterPartialTransactionRootCleanup` fail on
+missing backups; restored → both recover and remove the terminal journal.
+
+### Backport 2026-07-14: Audit Replay Rejects Truncation
+
+Cause: replay sought to a durable offset without proving the audit file still
+covered it; append repair could create a sparse gap after external truncation.
+Change: validate the opened file size before reading and immediately before an
+offset `WriteAt`; never truncate during repair; sync and read back the exact
+payload before removing it from the durable queue. Shorter files remain
+unchanged and fail closed.
+Scope: no manifest change.
+Evidence: fix removed →
+`TestLifecycleAuditDrainRejectsFileShorterThanDurableOffset` returns no error;
+restored → exact test rejects the offset and preserves bytes.
+
+### Backport 2026-07-14: Audit Path Is Supervisor-Stable
+
+Cause: `LifecyclePathsFor` consulted ambient `XDG_STATE_HOME`; an interactive
+install and its user-systemd refresh timer could persist audit queue offsets
+against different files.
+Change: derive audit and lock paths only from configured home at
+`$HOME/.local/state/wfctl/plugins/workflow-plugin-github`; ambient process
+environment cannot redirect lifecycle evidence.
+Scope: no manifest change.
+Evidence: fix removed →
+`TestLifecycleAuditPathDoesNotDependOnAmbientStateHome` observes two files;
+restored → interactive/systemd environments resolve the same path.
+
+### Backport 2026-07-14: Runtime State Is Config-Bound
+
+Cause: structural active-state and refresh-journal validation did not bind
+worker/plugin/component/profile provenance to the installed config on every
+runtime read.
+Change: status, install, refresh, serve-active, deferred finalization, outer
+install recovery, and lifecycle recovery validate current+previous selections
+and nested interrupted journals against the strict installed identity before
+commands or mutation.
+Scope: no manifest change.
+Evidence: binding removed → cross-worker serve reaches Podman validation and
+cross-worker recovery completes; restored →
+`TestServeActiveRejectsCrossWorkerActiveStateBeforePodman` and
+`TestRecoverInterruptedRejectsCrossWorkerJournalBeforeCommands` reject with
+zero commands; `TestRecoverInstallRejectsCrossWorkerDeferredJournalBeforeMutation`
+also preserves the candidate transaction root.
+
+### Backport 2026-07-14: Executable Release Schema
+
+Cause: release tests checked schema JSON syntax and field substrings but did not
+compile or consume the schema; its absolute-path regex was invalid for the
+repository's schema engine. Unbounded labels also exceeded the probe/journal
+contract.
+Change: compile the shipped schema; validate the runtime-decodable example,
+required-field/path/label boundaries; reject all ASCII controls/DEL in paths;
+require an exact `podman` executable basename; and enforce one exported
+64-label bound in runtime config, probe flags, and JSON Schema.
+Scope: no manifest change.
+Evidence: old regex → schema compilation fails on `\\u`; label guard removed →
+65-label runtime test fails; restored release and config contract tests pass.
+
+### Backport 2026-07-14: Audit Variants Are Strict And Queue-Shaped
+
+Cause: audit validation accepted contradictory tagged-union fields, while the
+first strict recovery rule overlooked that recovery events are coalesced
+diagnostics with count/first/last summary fields.
+Change: phase events alone carry outcome/provider effect/purge; recovery events
+carry disposition plus a valid diagnostic summary; error/overflow events carry
+error class plus summary. All variants reject foreign fields; overflow class is
+`other`; pending digest and offset are all-or-none.
+Scope: no manifest change.
+Evidence: contradictory phase/recovery/error cases fail closed; recovery suite
+and install rollback suite pass with queued recovery summaries.
+
+### Backport 2026-07-14: Pre-Mutation Artifact Ownership
+
+Cause: package copy and Podman build preceded the refresh journal, so failed or
+crashed campaigns could retain up to 512 MiB packages plus images per digest.
+Change: write a config-bound `staging` journal containing only signed update
+provenance before package/image mutation. Rollback and restart recovery remove
+only an image found at the deterministic ref with exact provider/worker/role/
+digest build labels, and remove its immutable image ID before the exact digest
+package; current and rollback digest or image IDs are fail-closed exclusions.
+Cleanup failure retains the journal and package for retry. The prepared phase
+begins only after image ID inspection.
+Scope: no manifest change; this replaces the rejected post-build transaction
+approach.
+Evidence: build/probe/activation failures remove only candidate artifacts;
+staging crash recovery preserves the active provider without stopping it;
+forced image-removal failure retains then successfully replays the journal.
+
+### Backport 2026-07-14: Durable Directory Entries
+
+Cause: `MkdirAll` plus leaf-directory sync did not persist each newly added
+parent entry before a transaction could report durable completion.
+Change: all retained-provider production directory creation is incremental;
+each child creation is immediately followed by parent-directory sync. Atomic
+JSON/files, locks, lifecycle/audit roots, packages, state, and systemd drop-ins
+use the same primitive.
+Scope: no manifest change.
+Evidence: injected sync-order test proves `base -> base/one` after creating
+`base/one/two`; production scan contains no `os.MkdirAll` outside tests.
+
+### Backport 2026-07-14: Cleanup Parent Roots Are Authoritative
+
+Cause: digest-child validation followed an intermediate `candidates` or
+`packages` symlink before removal, allowing rollback cleanup outside the
+managed install root.
+Change: validate each managed parent as an owned real directory before child
+lookup/removal; missing roots remain idempotent. Artifact cleanup also refuses
+digests named by current or rollback active state.
+Scope: no manifest change.
+Evidence: candidate-state and package-root symlink regressions preserve outside
+sentinels; focused and full retained suites pass.
+
+### Backport 2026-07-14: Fenced Reciprocal Rollback
+
+Cause: a crash inside nested refresh can leave a deferred inner journal before
+the fenced outer journal copies its explicit binding.
+Change: only a fenced outer transaction may roll back an unrecorded inner when
+the inner reciprocally names the exact outer transaction/profile and matches
+worker/plugin/component identity. Ready/commit still require explicit binding.
+Scope: no manifest change.
+Evidence: full recovery matrix passes for staging, prepared, promoting,
+promoted, activated, and committed inner phases without forward adoption.
+
+### Backport 2026-07-14: Producer-Consumer Boundary Limits
+
+Cause: accepted credentials could exceed the environment scanner token limit;
+the shipped schema rejected runtime-valid `/podman`.
+Change: credentials are capped at 32 KiB before rendering; schema and runtime
+share root/nested Podman path acceptance. Audit overflow is constructed as a
+fresh variant so recovery disposition cannot leak into overflow fields.
+Scope: no manifest change.
+Evidence: exact credential boundary, `/podman`, and recovery-overflow tests
+fail on the prior implementation and pass after the correction.
+
+### Backport 2026-07-14: Provider Environment Cannot Expand Authority
+
+Cause: runtime validation required configured repository, organization, and
+runner-group values to appear in comma-separated lists, so a modified env file
+could silently add scopes. It also accepted an unconfigured GitHub API base URL.
+Change: retained provider allowlists are canonical singleton values that must
+exactly equal strict config, and unbound API-base configuration is rejected.
+The general provider executable retains its independently configured multi-scope
+and GitHub Enterprise support; the retained installer does not acquire either
+implicitly from mutable environment.
+Scope: no manifest change.
+Evidence: `TestProviderEnvironmentCannotBroadenConfiguredGitHubAuthority` fails
+for repository, organization, runner-group, and API-base expansion when the old
+contains/allow behavior is restored.
+
+### Backport 2026-07-14: Host Executors Are Explicit Recovery Authority
+
+Cause: Podman was path-configured but not durably attested, while systemctl and
+loginctl were hard-coded. A mutable executable path could therefore change the
+commands used by startup or crash recovery.
+Change: strict config names canonical absolute Podman, systemctl, and loginctl
+paths outside all managed and external authority paths. Runtime preflight
+requires regular executable files with root/current-user ownership and no
+group/world write permission. Lifecycle journals persist all three content
+digests and re-attest them before recovery mutation; active startup and status
+validate the executor immediately before first use. No ambient PATH lookup is
+used.
+Scope: no manifest change.
+Evidence: `TestInstallHostPreflightRequiresNonRootLingeringAndRootlessPodman`
+fails when systemctl/loginctl revert to hard-coded paths;
+`TestHostPreflightRejectsUntrustedExecutableBeforeCommands` fails when host
+authority validation is removed; and
+`TestLifecycleRecoveryAttestsConfiguredHostExecutables` fails when recovery
+stops checking the recorded Podman digest.
+
+### Backport 2026-07-14: Snapshot Authority Survives Rollback Transition
+
+Cause: fenced wiring recovery deleted snapshot backups before durably writing
+`ready{outcome:rollback}`; a crash stranded a `fenced` journal whose recovery
+authority no longer existed.
+Change: lifecycle rollback restores bytes/units but retains snapshot metadata
+and backups through ready/releasing/committed. Terminal transaction cleanup
+removes them. Legacy one-shot rollback still removes backups after success.
+Scope: no manifest change.
+Evidence: `TestRollbackInstallBeforeStartRetainsSnapshotsForLifecycleCommit`
+fails when the helper removes backups and passes when outer cleanup owns them.
+
+### Backport 2026-07-14: Durable Provider Rename And Rollback Phases
+
+Cause: two cross-directory state renames shared one journal phase; rollback
+renamed previous state back and could crash before journal removal, making retry
+misclassify the restored state as missing rollback authority.
+Change: promotion persists `state_detached` between renames and syncs both
+source/destination parents per rename. Rollback persists
+`rollback_restoring -> rollback_restored -> rollback_cleaned`, records the exact
+forward origin, and resumes each phase idempotently before journal removal.
+Scope: no manifest change.
+Evidence: `TestProviderStatePromotionPersistsEachCrossDirectoryRename`,
+`TestRecoverInterruptedResumesAfterPreviousStateWasAlreadyRestored`, and
+`TestRecoverInterruptedFinishesEveryPersistedRollbackPhase` pass.
+
+### Backport 2026-07-14: Config Paths Cannot Alias Managed State
+
+Cause: externally authoritative agent/supervisor/status/marker/systemd paths
+could alias one another or installer-managed provider files, collapsing trust
+boundaries and making rollback overwrite its own inputs.
+Change: external authority paths are pairwise non-overlapping, outside the
+dedicated install root, and cannot equal, contain, or be contained by any
+generated managed state path. The systemd authority directory may contain only
+its expected generated unit/drop-in paths and cannot overlap other authorities.
+Scope: no manifest change.
+Evidence: `TestConfigRejectsUnsafeIdentityAndPaths` and
+`TestConfigRejectsAuthorityOverlapWithLifecycleState` reject managed aliases,
+ancestor/descendant authority overlap, and agent/systemd paths inside
+`install_root`.
+
+### Backport 2026-07-14: Fixed-Name Containers Require Podman Ownership
+
+Cause: cleanup force-removed the configured candidate name without proving
+ownership, while stable and probe fixed names had no ownership or stale-crash
+recovery contract.
+Change: candidate, stable, and probe creation applies managed/worker/role
+labels. Cleanup accepts only configured name/role pairs, queries the exact
+regex-escaped name, validates one full immutable ID plus all labels, and removes
+only that ID; absent is idempotent and collisions fail closed. Every probe
+attempt cleans before and after execution, and post-run cleanup uses a detached
+two-command budget so both ownership inspection and removal receive their own
+bounded command window after caller cancellation. The aggregate probe budget
+counts both pre-run and post-run inspect/remove paths for every attempt. Config validation requires the
+stable, candidate, stable-probe, and candidate-probe derived names to be unique
+so cleanup authority cannot collide across roles.
+Scope: no manifest change.
+Evidence: `TestProviderCommandsCarryRoleSpecificCleanupOwnershipLabels`,
+`TestServeActiveValidatesImmutableImageThenExecsRestrictedPodman`,
+`TestRefreshRemovesOwnedStaleProbeBeforeRetry`, and
+`TestManagedProbeCleansOwnedOrphanAfterCallerCancellation` pass;
+`TestConfigRejectsManagedContainerNameCollisions` fails when derived-name
+validation is removed.
+
+### Backport 2026-07-14: Refresh Unit Covers Bounded Aggregate Runtime
+
+Cause: systemd allowed 15 minutes while a bounded build plus candidate/stable
+probe retries, three status waits, and ownership cleanup can legitimately exceed
+that duration. The first 45-minute correction still omitted complete status and
+probe-cleanup budgets.
+Change: shared computed refresh and rollback bounds cover three worst-case local
+status loops, build, candidate/stable probe attempts and delays, four ownership
+commands per probe attempt, container starts, control operations, and a
+filesystem margin. The systemd start bound additionally composes initial
+lifecycle recovery, deferred install/provider rollback, the full forward
+refresh, and failure recovery. Its explicit stop bound leaves a complete
+lifecycle-recovery window after cancellation; per-command limits remain
+unchanged.
+Scope: no manifest change.
+Evidence: `TestRenderSystemdUnitsUsesStableAbsolutePathsAndNoShell` asserts the
+rendered aggregate timeout; `TestRetainedTimeoutsCoverBoundedRefreshAndRollbackOperations`
+proves both aggregate bounds dominate their component budgets.
+
+### Backport 2026-07-14: Failure Recovery Has An Aggregate Budget
+
+Cause: install, uninstall, and refresh failure handlers, plus legacy wiring
+rollback, placed an entire multi-command recovery sequence under one 30-second
+deadline even though each bounded control command may consume that duration.
+Change: lifecycle and wiring rollback use computed aggregate deadlines derived
+from the retained rollback, local-status, probe, and control-command budgets;
+caller cancellation still cannot interrupt durable recovery.
+Scope: no manifest change.
+Evidence: the candidate-probe failure path observes the full stable-probe
+deadline during recovery, and
+`TestRollbackInstallBeforeStartRetainsSnapshotsForLifecycleCommit` observes a
+multi-command rollback deadline above one control-command interval. Replacing
+the computed wiring deadline with 30 seconds makes the latter test fail.
+
+### Backport 2026-07-14: Provider Image Cleanup Is Immutable And Owned
+
+Cause: cleanup selected an image by mutable deterministic tag even though the
+prepared journal records its immutable ID; a same-name image could therefore be
+deleted after tag rebinding.
+Change: provider image builds carry exact managed/worker/role/digest labels.
+Prepared cleanup and active startup inventory the exact durable image ID,
+validate its managed/worker/role/digest labels, treat absence as idempotent for
+cleanup, and remove or execute only that normalized ID. Pre-ID staging recovery
+inventories by the complete ownership-label tuple and rejects ambiguity.
+Mutable tags are never cleanup or startup authority. Garbage collection uses
+the same owned-image path.
+Scope: no manifest change.
+Evidence: `TestRollbackImageCleanupRequiresOwnershipAndImmutableID` covers
+absent, unowned, ID-mismatch, and owned cases; the build test proves all labels
+are emitted and fails when they are removed.
+`TestProviderImageCleanupUsesImmutableIDOrOwnershipLabelsWithoutTag` and
+`TestServeActiveValidatesImmutableImageThenExecsRestrictedPodman` fail when the
+inventory is changed back to a mutable reference filter.
+
+### Backport 2026-07-14: Same-Digest Runtime Artifacts Are Reconciled
+
+Cause: digest equality bypassed mutation and only probed the durable image ID,
+so Podman storage loss or managed-label drift could never rebuild an otherwise
+valid signed provider package.
+Change: reconciliation inventories the durable active image before selecting the
+unchanged path. Absence or exact-label drift enters a fenced `runtime_repair`
+transaction that reuses the verified package, rebuilds and probes candidate and
+stable containers, and preserves the older rollback selection instead of
+duplicating the repaired digest. Failed repair removes only the rebuilt owned
+image, retains the verified package and prior durable selection, skips a
+knowingly absent-image probe, clears both journals, and leaves the next timer
+free to retry. Malformed or ambiguous Podman inventory still fails closed.
+Scope: no manifest change.
+Evidence: `TestSameDigestRefreshRepairsMissingActiveImageUnderFence`,
+`TestSameDigestOwnershipDriftRequiresRuntimeRepair`,
+`TestFailedSameDigestRepairRemovesImageButRetainsVerifiedPackage`, and
+`TestRuntimeRepairJournalAllowsSameDigestAndPreservesPriorSelection` cover
+fencing, rebuild, ownership drift, rollback cleanup, package retention, and
+committed recovery. Removing outer drift detection makes repair proceed without
+the maintenance fence and fails the first test.
+
+### Backport 2026-07-14: Outer And Inner Provider Effects Must Agree
+
+Cause: install selected `unchanged` from digest equality before checking the
+active Podman image, and image loss between outer classification and inner
+refresh could trigger runtime mutation without the outer maintenance fence.
+Change: install inventories the same-digest active image before selecting its
+provider effect. The inner refresh receives the outer expected digest/effect,
+rechecks immediately before mutation, and returns a mutation-required sentinel
+on drift. An unchanged refresh then closes its clean outer transaction and
+restarts through the changed, fenced lifecycle while retaining the install lock.
+Scope: no manifest change.
+Evidence: `TestReinstallMissingActiveImageUsesChangedProviderTransaction` and
+`TestSameDigestImageLossRaceRestartsThroughFenceBeforeRepair` pass; reverting
+either outer classification or inner effect enforcement reproduces the
+transaction mismatch or unfenced build.
+
+### Backport 2026-07-14: Rendered Systemd Bounds Round Up
+
+Cause: converting computed durations with integer division truncated
+fractional seconds, so a rendered systemd deadline could be shorter than the
+bounded operation it protects.
+Change: all rendered systemd timeout directives use ceiling conversion to
+whole seconds.
+Scope: no manifest change.
+Evidence: `TestRenderSystemdUnitsUsesStableAbsolutePathsAndNoShell` parses each
+directive and proves its duration is greater than or equal to the computed Go
+budget; restoring truncation makes the test fail.
+
+### Backport 2026-07-14: Managed Paths Inherit Trusted Authority
+
+Cause: user-path validation skipped the home directory itself, and durable
+directory creation trusted the first existing ancestor without checking its
+owner or group/other writability.
+Change: the home and every existing managed-path component must be a real
+directory owned by the current user and not group/other writable on Unix.
+Durable directory creation and tree cloning validate the nearest existing
+ancestor before adding children.
+Scope: no manifest change.
+Evidence: `TestValidateUserPathRejectsSymlinkedHomeAndWritableAuthority` and
+`TestDurableDirectoryCreationRejectsWritableExistingAncestor` pass; removing
+the authority checks makes both regressions fail.
+
+### Backport 2026-07-14: Example Runtime Proof Uses Owned Host State
+
+Cause: the packaging test decoded the Linux operator example against its
+literal `/home/wfcompute` path, assuming that account existed on every clean
+test host after home-authority validation became mandatory.
+Change: schema proof still consumes the exact shipped example; runtime proof
+rebases only its documented home prefix onto an owned `t.TempDir()` and then
+runs the strict production decoder.
+Scope: no manifest change.
+Evidence: `TestReleaseArchiveIncludesRetainedProviderConfigContract` fails with
+`inspect home authority` on a host without `/home/wfcompute` before the change
+and passes against real temporary authority afterward.
+
+### Backport 2026-07-14: Shipped Provider Uses Fixed Runtime Dependencies
+
+Cause: the release module still selected Go `1.26.4`, `x/net v0.54.0`, and
+Kinesis `v1.43.4`; `govulncheck` reached the Go TLS and `x/net/idna`
+advisories through the new provider server/probe and the Kinesis decoder panic
+through transitive SDK initialization.
+Change: require Go `1.26.5`, `x/net v0.55.0`, its compatible `x/sys v0.45.0`,
+and Kinesis `v1.43.5`. Five inherited Docker advisories remain because no fixed
+Docker module release exists; this provider path does not call the affected
+archive/copy/AuthZ APIs. Removing the Workflow SDK's Docker dependency from the
+provider binary is a later control-plane/dependency-light extraction, not a
+manifest change here.
+Scope: no manifest change.
+Evidence: `govulncheck ./cmd/github-runner-provider` drops the two standard
+library, `x/net`, and Kinesis findings and reports only the five no-fix Docker
+advisories after the pins.

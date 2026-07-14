@@ -2,13 +2,15 @@
 
 package retainedprovider
 
-import "os"
+import (
+	"errors"
+	"os"
+)
 
 func syncDirectory(path string) error {
 	directory, err := os.Open(path)
 	if err != nil {
 		return err
 	}
-	defer directory.Close()
-	return directory.Sync()
+	return errors.Join(directory.Sync(), directory.Close())
 }

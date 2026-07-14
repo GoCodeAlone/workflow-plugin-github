@@ -75,6 +75,103 @@ provider-owned JIT runner ID recorded in the ownership journal. Workload outputs
 are returned through the declared `github-workload-outputs.tar.gz` provider
 artifact rather than arbitrary names.
 
+#### Retained Linux provider
+
+The release archive includes `github-runner-provider` for a user-scoped Linux
+installation alongside a retained workflow-compute agent. The host must have a
+lingering user systemd manager, rootless Podman, and an agent bundle that
+supports supervisor maintenance and signed package verification. The strict
+non-secret config is generated for the registered worker and must use absolute
+paths under that user's home.
+
+Enable the user manager once with administrative access, then verify the rest
+as the retained agent user. Installation rejects UID 0, disabled linger, a
+missing user manager, and a non-rootless Podman runtime.
+
+```sh
+sudo loginctl enable-linger "$USER"
+systemctl --user show-environment >/dev/null
+test "$(loginctl show-user "$(id -u)" --property Linger --value)" = yes
+test "$(podman info --format '{{.Host.Security.Rootless}}')" = true
+```
+
+The archive ships
+`schemas/github-runner-retained-config.schema.json` and the runtime-validated
+`examples/github-runner-retained-config.json`. Place the config in an
+owner-only regular file under the retained user's home. Replace
+`/home/wfcompute` with that exact home, and set the worker/profile IDs, agent
+unit, supervisor paths, provider marker path, organization/repository, runner
+group/labels, workflow, and full 40-character commit `ref` from the retained
+agent registration and provider campaign. The following constraints are also
+enforced by the runtime decoder:
+
+- `install_root` is exactly
+  `$HOME/.workflow-compute/github-runner-provider`.
+- `provider_url` uses HTTPS on port `18090`; its host equals
+  `stable_container`, and `candidate_container` is different.
+- `component_id` identifies the provider component in the agent supervisor
+  config, while `provider_marker_path` identifies that component's signed
+  current-update marker.
+- `podman_path`, `systemctl_path`, and `loginctl_path` identify canonical
+  executable paths outside provider-managed state. Install rejects symlinks,
+  non-regular files, untrusted ownership, group/world-writable executables, and
+  lifecycle recovery re-attests their recorded digests before mutation.
+- Every configured user path stays below the same home and has no symlinked
+  existing component. The config contains no credentials.
+
+Run the one-time install or an idempotent reinstall with credentials in the
+process environment, never in the config or command arguments:
+
+```sh
+GITHUB_RUNNER_PROVIDER_GITHUB_TOKEN="${GITHUB_TOKEN}" \
+GITHUB_RUNNER_PROVIDER_TOKEN="${PROVIDER_TOKEN}" \
+  github-runner-provider retained install -config <absolute-config-path>
+```
+
+After installation, autonomous refresh is driven by the retained agent's
+signed package marker and a recurring user-systemd timer. A workflow is not
+needed for routine provider updates. Check the redacted local state with:
+
+```sh
+github-runner-provider retained status -config <absolute-config-path>
+```
+
+For credential rotation, re-run `retained install` with the same config and the
+replacement environment values. The transaction preserves the worker identity,
+provider state, and retained-agent registration. A credential reinstall also
+rotates the private CA and server key. Between reinstalls, refresh renews the
+provider server certificate before its final 30 days while retaining the CA and
+server key.
+
+Interrupted current-format transactions recover automatically on the next
+lifecycle command. Only when an error explicitly reports an unbound legacy
+provider transaction should an operator use the exact transaction ID printed
+by that error:
+
+```sh
+github-runner-provider retained recover -config <absolute-config-path> \
+  -confirm <exact-legacy-provider-transaction-id>
+```
+
+Uninstall is deliberately separate from install/update orchestration. The
+default retains provider state and credentials so a later reinstall can recover
+ownership safely:
+
+```sh
+github-runner-provider retained uninstall -config <absolute-config-path>
+```
+
+Only remove retained state and credentials after update/reconnect evidence is
+complete:
+
+```sh
+github-runner-provider retained uninstall -config <absolute-config-path> --purge
+```
+
+GitHub workflow output is orchestration evidence only. Acceptance requires a
+job dispatched by workflow-compute STG to the registered agent and validation
+through the STG task, proof, log, and artifact APIs.
+
 ### Step: `step.gh_action_trigger`
 
 Triggers a GitHub Actions workflow via `workflow_dispatch`.

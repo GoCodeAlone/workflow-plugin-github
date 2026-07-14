@@ -30,7 +30,7 @@ func AtomicWriteJSON(path string, value any) (returnErr error) {
 		return fmt.Errorf("encoded JSON exceeds %d bytes", MaxStateFileBytes)
 	}
 	directory := filepath.Dir(path)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
+	if err := mkdirAllDurable(directory, 0o700); err != nil {
 		return fmt.Errorf("create state directory: %w", err)
 	}
 	if err := rejectNonRegularDestination(path); err != nil {
@@ -71,6 +71,49 @@ func AtomicWriteJSON(path string, value any) (returnErr error) {
 	return nil
 }
 
+func mkdirAllDurable(path string, mode fs.FileMode) error {
+	return mkdirAllDurableWithSync(path, mode, syncDirectory)
+}
+
+func mkdirAllDurableWithSync(path string, mode fs.FileMode, syncDir func(string) error) error {
+	if path == "" || mode.Perm() != mode || mode&0o077 != 0 || syncDir == nil {
+		return errors.New("durable directory path, mode, and sync are required")
+	}
+	path = filepath.Clean(path)
+	missing := make([]string, 0, 4)
+	ancestor := path
+	for {
+		info, err := os.Lstat(ancestor)
+		if err == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("durable directory ancestor must be a real directory: %s", ancestor)
+			}
+			if err := validateManagedPathAuthority(info); err != nil {
+				return fmt.Errorf("durable directory ancestor authority: %w", err)
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect durable directory ancestor: %w", err)
+		}
+		missing = append(missing, ancestor)
+		parent := filepath.Dir(ancestor)
+		if parent == ancestor {
+			return errors.New("durable directory has no existing ancestor")
+		}
+		ancestor = parent
+	}
+	for index := len(missing) - 1; index >= 0; index-- {
+		if err := os.Mkdir(missing[index], mode); err != nil {
+			return fmt.Errorf("create durable directory: %w", err)
+		}
+		if err := syncDir(filepath.Dir(missing[index])); err != nil {
+			return fmt.Errorf("sync durable directory parent: %w", err)
+		}
+	}
+	return nil
+}
+
 func ReadStrictJSONFile(path string, target any) error {
 	entry, err := os.Lstat(path)
 	if err != nil {
@@ -92,7 +135,7 @@ func ReadStrictJSONFile(path string, target any) error {
 	if err != nil {
 		return fmt.Errorf("open state file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 	opened, err := file.Stat()
 	if err != nil {
 		return fmt.Errorf("stat opened state file: %w", err)
@@ -117,13 +160,23 @@ func ReadStrictJSONFile(path string, target any) error {
 }
 
 // ValidateUserPath enforces a lexical user-home boundary and rejects symlinks
-// or foreign-owned files in every existing component below that boundary.
+// or untrusted ownership and writability in every existing component.
 func ValidateUserPath(home, path string, requireExisting bool) error {
 	if !filepath.IsAbs(home) || !filepath.IsAbs(path) {
 		return fmt.Errorf("path and home must be absolute")
 	}
 	home = filepath.Clean(home)
 	path = filepath.Clean(path)
+	homeInfo, err := os.Lstat(home)
+	if err != nil {
+		return fmt.Errorf("inspect home authority: %w", err)
+	}
+	if !homeInfo.IsDir() || homeInfo.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("home authority must be a real directory without symlinks")
+	}
+	if err := validateManagedPathAuthority(homeInfo); err != nil {
+		return fmt.Errorf("home authority: %w", err)
+	}
 	relative, err := filepath.Rel(home, path)
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
 		return fmt.Errorf("path must remain within home")
@@ -145,8 +198,8 @@ func ValidateUserPath(home, path string, requireExisting bool) error {
 			if info.Mode()&os.ModeSymlink != 0 {
 				return fmt.Errorf("path contains symlink: %s", current)
 			}
-			if err := validateOwner(info); err != nil {
-				return fmt.Errorf("path ownership: %w", err)
+			if err := validateManagedPathAuthority(info); err != nil {
+				return fmt.Errorf("path authority: %w", err)
 			}
 		}
 	}
@@ -189,6 +242,9 @@ func cloneRegularTreeWithSync(source, destination string, limits CloneLimits, sy
 		if err == nil {
 			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 				return fmt.Errorf("clone destination ancestor must be a regular directory")
+			}
+			if err := validateManagedPathAuthority(info); err != nil {
+				return fmt.Errorf("clone destination ancestor authority: %w", err)
 			}
 			break
 		}
@@ -277,7 +333,7 @@ func cloneRegularFile(source, destination string, expected os.FileInfo) (returnE
 	if err != nil {
 		return err
 	}
-	defer input.Close()
+	defer func() { _ = input.Close() }()
 	opened, err := input.Stat()
 	if err != nil || !opened.Mode().IsRegular() || !os.SameFile(expected, opened) {
 		return fmt.Errorf("clone source file changed during open")
@@ -333,7 +389,7 @@ type InstallLock struct {
 }
 
 func AcquireInstallLock(path string) (*InstallLock, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := mkdirAllDurable(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("create lock directory: %w", err)
 	}
 	file, err := openRegularLockFile(path)

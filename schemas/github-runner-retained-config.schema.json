@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/GoCodeAlone/workflow-plugin-github/schemas/github-runner-retained-config.schema.json",
+  "title": "Retained GitHub Runner Provider Configuration",
+  "description": "Non-secret Linux lifecycle configuration consumed by github-runner-provider retained commands.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "protocol_version",
+    "worker_id",
+    "profile_id",
+    "plugin_id",
+    "component_id",
+    "compute_agent_path",
+    "supervisor_config_path",
+    "local_status_path",
+    "provider_marker_path",
+    "install_root",
+    "systemd_dir",
+    "agent_unit",
+    "podman_path",
+    "systemctl_path",
+    "loginctl_path",
+    "provider_url",
+    "stable_container",
+    "candidate_container",
+    "container_network",
+    "organization",
+    "repository",
+    "workflow",
+    "ref",
+    "runner_name",
+    "runner_group",
+    "labels",
+    "refresh_interval_seconds"
+  ],
+  "properties": {
+    "protocol_version": { "const": "retained-provider.config.v1" },
+    "worker_id": { "$ref": "#/$defs/identifier" },
+    "profile_id": { "$ref": "#/$defs/identifier" },
+    "plugin_id": { "const": "workflow-plugin-github" },
+    "component_id": { "$ref": "#/$defs/identifier" },
+    "compute_agent_path": { "$ref": "#/$defs/absolutePath" },
+    "supervisor_config_path": { "$ref": "#/$defs/absolutePath" },
+    "local_status_path": { "$ref": "#/$defs/absolutePath" },
+    "provider_marker_path": { "$ref": "#/$defs/absolutePath" },
+    "install_root": { "$ref": "#/$defs/absolutePath" },
+    "systemd_dir": { "$ref": "#/$defs/absolutePath" },
+    "agent_unit": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.service$"
+    },
+    "podman_path": {
+      "type": "string",
+      "pattern": "^/(?:podman|[^\\x00-\\x1F\\x7F]*/podman)$"
+    },
+    "systemctl_path": {
+      "type": "string",
+      "pattern": "^/(?:systemctl|[^\\x00-\\x1F\\x7F]*/systemctl)$"
+    },
+    "loginctl_path": {
+      "type": "string",
+      "pattern": "^/(?:loginctl|[^\\x00-\\x1F\\x7F]*/loginctl)$"
+    },
+    "provider_url": {
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https://[A-Za-z0-9][A-Za-z0-9._-]{0,127}:18090/?$"
+    },
+    "stable_container": { "$ref": "#/$defs/identifier" },
+    "candidate_container": { "$ref": "#/$defs/identifier" },
+    "container_network": { "const": "wfcompute-github-provider" },
+    "organization": { "$ref": "#/$defs/identifier" },
+    "repository": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "workflow": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]*\\.ya?ml$",
+      "not": { "pattern": "\\.\\." }
+    },
+    "ref": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "runner_name": { "$ref": "#/$defs/probeIdentifier" },
+    "runner_group": { "$ref": "#/$defs/identifier" },
+    "labels": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/probeIdentifier" }
+    },
+    "refresh_interval_seconds": {
+      "type": "integer",
+      "minimum": 60,
+      "maximum": 86400
+    }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "probeIdentifier": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/[^\\x00-\\x1F\\x7F]*$"
+    }
+  }
+}

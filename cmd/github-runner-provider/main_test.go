@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,7 +34,7 @@ func TestProviderBinaryHasFallbackCertificateRoots(t *testing.T) {
 		if err != nil {
 			panic(err)
 		}
-		if len(pool.Subjects()) == 0 {
+		if pool.Equal(x509.NewCertPool()) {
 			panic("provider binary has no fallback certificate roots")
 		}
 		return
@@ -271,6 +273,20 @@ func TestProviderProbeFailsClosedOnInvalidConfiguration(t *testing.T) {
 	}
 }
 
+func TestProviderProbeRejectsMoreThanRetainedConfigLabelLimit(t *testing.T) {
+	labels := make([]string, 65)
+	for index := range labels {
+		labels[index] = fmt.Sprintf("label-%d", index)
+	}
+	_, err := validateProviderProbeFlags(
+		"https://provider.test:18090", "/ca.pem", "GoCodeAlone", "GoCodeAlone/workflow-compute",
+		"dogfood-provider-target.yml", strings.Repeat("a", 40), "wfc-stg-ghp-linux-probe", "ephemeral", labels,
+	)
+	if err == nil || !strings.Contains(err.Error(), "64") {
+		t.Fatalf("oversized label set err = %v", err)
+	}
+}
+
 func TestProviderProbeRejectsUnknownResponseFieldsAndDoesNotEchoErrorBody(t *testing.T) {
 	const providerToken = "provider-secret-token"
 	for _, tc := range []struct {
@@ -307,6 +323,40 @@ func TestProviderProbeRejectsUnknownResponseFieldsAndDoesNotEchoErrorBody(t *tes
 				t.Fatalf("failed probe leaked output: err=%v stdout=%q", err, stdout.String())
 			}
 		})
+	}
+}
+
+func TestProviderProbeRejectsRedirectWithoutForwardingBearer(t *testing.T) {
+	const providerToken = "provider-secret-token"
+	redirected := false
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirected" {
+			redirected = true
+			if r.Header.Get("Authorization") == "Bearer "+providerToken {
+				t.Error("redirected request received provider bearer token")
+			}
+			_, _ = io.WriteString(w, `{"status":"ok"}`)
+			return
+		}
+		http.Redirect(w, r, "/redirected", http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+	caFile := writeProviderProbeTestCA(t, server)
+	client, err := newProviderProbeHTTPClient(caFile)
+	if err != nil {
+		t.Fatalf("build probe client: %v", err)
+	}
+	endpoint, err := url.Parse(server.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("parse probe endpoint: %v", err)
+	}
+	var response providerProbeReadyResponse
+	err = providerProbeJSON(t.Context(), client, http.MethodGet, endpoint, providerToken, nil, &response)
+	if err == nil || !strings.Contains(err.Error(), "redirect") {
+		t.Fatalf("redirect probe error = %v", err)
+	}
+	if redirected {
+		t.Fatal("provider probe followed redirect")
 	}
 }
 

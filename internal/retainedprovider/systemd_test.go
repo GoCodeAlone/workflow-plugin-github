@@ -46,8 +46,30 @@ func TestRenderSystemdUnitsUsesStableAbsolutePathsAndNoShell(t *testing.T) {
 			t.Fatalf("provider unit missing %q:\n%s", required, units.ProviderService)
 		}
 	}
-	if !strings.Contains(units.RefreshService, "ExecStart="+systemdQuote(paths.Launcher)+" retained refresh -config "+systemdQuote(paths.ConfigFile)) || !strings.Contains(units.RefreshService, "Type=oneshot") || !strings.Contains(units.RefreshService, "TimeoutStartSec=15min") {
+	wantRefreshStartTimeout := "TimeoutStartSec=" + strconv.FormatInt(ceilDurationSeconds(retainedRefreshServiceStartTimeout), 10) + "s"
+	wantRefreshStopTimeout := "TimeoutStopSec=" + strconv.FormatInt(ceilDurationSeconds(retainedRefreshServiceStopTimeout), 10) + "s"
+	if !strings.Contains(units.RefreshService, "ExecStart="+systemdQuote(paths.Launcher)+" retained refresh -config "+systemdQuote(paths.ConfigFile)) || !strings.Contains(units.RefreshService, "Type=oneshot") || !strings.Contains(units.RefreshService, wantRefreshStartTimeout) || !strings.Contains(units.RefreshService, wantRefreshStopTimeout) {
 		t.Fatalf("refresh service = %s", units.RefreshService)
+	}
+	for directive, minimum := range map[string]time.Duration{
+		"TimeoutStartSec": retainedRefreshServiceStartTimeout,
+		"TimeoutStopSec":  retainedRefreshServiceStopTimeout,
+	} {
+		var rendered time.Duration
+		for _, line := range strings.Split(units.RefreshService, "\n") {
+			value, found := strings.CutPrefix(line, directive+"=")
+			if !found {
+				continue
+			}
+			seconds, err := strconv.ParseInt(strings.TrimSuffix(value, "s"), 10, 64)
+			if err != nil || !strings.HasSuffix(value, "s") {
+				t.Fatalf("parse %s=%q: %v", directive, value, err)
+			}
+			rendered = time.Duration(seconds) * time.Second
+		}
+		if rendered < minimum {
+			t.Fatalf("%s = %s want at least %s", directive, rendered, minimum)
+		}
 	}
 	if !strings.Contains(units.RefreshPath, "PathChanged="+systemdPathValue(config.ProviderMarkerPath)) || !strings.Contains(units.RefreshPath, "Unit="+refreshServiceUnit) {
 		t.Fatalf("refresh path = %s", units.RefreshPath)
@@ -65,6 +87,52 @@ func TestRenderSystemdUnitsUsesStableAbsolutePathsAndNoShell(t *testing.T) {
 		if strings.Contains(unit, "NoNewPrivileges=true") || strings.Contains(unit, "PrivateTmp=true") {
 			t.Fatalf("%s unit blocks rootless Podman namespace setup: %s", name, unit)
 		}
+	}
+}
+
+func ceilDurationSeconds(duration time.Duration) int64 {
+	return int64((duration + time.Second - 1) / time.Second)
+}
+
+func TestRetainedTimeoutsCoverBoundedRefreshAndRollbackOperations(t *testing.T) {
+	localStatusBudget := time.Duration(localStatusAttempts)*controlCommandTimeout + time.Duration(localStatusAttempts-1)*time.Second
+	probeBudget := 5*providerProbeTimeout + 250*time.Millisecond + 500*time.Millisecond + time.Second + 2*time.Second
+	probeOwnershipBudget := 4 * providerProbeAttemptCount * controlCommandTimeout
+	controlAndFilesystemMargin := 20*controlCommandTimeout + 5*time.Minute
+	minimumRefresh := 3*localStatusBudget + providerBuildTimeout + 2*(probeBudget+probeOwnershipBudget) + 2*containerStartTimeout + controlAndFilesystemMargin
+	if retainedRefreshTimeout < minimumRefresh {
+		t.Fatalf("refresh timeout = %s want at least %s", retainedRefreshTimeout, minimumRefresh)
+	}
+	minimumRollback := probeBudget + probeOwnershipBudget + 6*controlCommandTimeout + 5*time.Minute
+	if retainedRollbackTimeout < minimumRollback {
+		t.Fatalf("rollback timeout = %s want at least %s", retainedRollbackTimeout, minimumRollback)
+	}
+	minimumServiceStart := 2*lifecycleRecoveryTimeout + retainedRollbackTimeout + installRollbackTimeout + retainedRefreshTimeout
+	if retainedRefreshServiceStartTimeout < minimumServiceStart {
+		t.Fatalf("refresh service start timeout = %s want at least %s", retainedRefreshServiceStartTimeout, minimumServiceStart)
+	}
+	if retainedRefreshServiceStopTimeout < lifecycleRecoveryTimeout {
+		t.Fatalf("refresh service stop timeout = %s want at least %s", retainedRefreshServiceStopTimeout, lifecycleRecoveryTimeout)
+	}
+
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	journal := TransactionJournal{
+		ProtocolVersion: TransactionJournalProtocolVersion,
+		ID:              "rollback-timeout",
+		Phase:           JournalStaging,
+		Candidate:       ImageSelection{Update: validTestSelection(now).Update},
+		StartedAt:       now,
+		UpdatedAt:       now,
+	}
+	runner := &recordingCommandRunner{}
+	if err := AtomicWriteJSON(paths.Journal, journal); err != nil {
+		t.Fatalf("write rollback journal: %v", err)
+	}
+	if err := (Refresher{Runner: runner}).rollback(t.Context(), config, paths, journal, false); err != nil {
+		t.Fatalf("rollback timeout budget: %v", err)
 	}
 }
 
@@ -154,7 +222,7 @@ func TestGenerateInstallMaterialSeparatesProviderProbeAndAgentSecrets(t *testing
 	if err := WriteInstallMaterial(paths, material); err != nil {
 		t.Fatalf("write install material: %v", err)
 	}
-	for _, path := range []string{paths.ProviderEnv, paths.ProbeEnv, paths.AgentEnv, paths.ContainersConf, paths.CAFile, paths.ServerCert, paths.ServerKey} {
+	for _, path := range []string{paths.ProviderEnv, paths.ProbeEnv, paths.AgentEnv, paths.ContainersConf, paths.CAFile, paths.CAKey, paths.ServerCert, paths.ServerKey} {
 		info, err := os.Stat(path)
 		if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
 			t.Fatalf("generated file %s mode=%v err=%v", path, info, err)
@@ -162,6 +230,109 @@ func TestGenerateInstallMaterialSeparatesProviderProbeAndAgentSecrets(t *testing
 	}
 	if data, err := os.ReadFile(paths.ContainersConf); err != nil || string(data) != "[network]\ndefault_network = \"wfcompute-github-provider\"\n" {
 		t.Fatalf("containers.conf data=%q err=%v", data, err)
+	}
+	if strings.HasPrefix(paths.CAKey, paths.TLSRoot+string(os.PathSeparator)) {
+		t.Fatalf("CA signing key is exposed through the provider TLS mount: %s", paths.CAKey)
+	}
+}
+
+func TestCredentialsRespectEnvironmentReaderBoundary(t *testing.T) {
+	const credentialLimit = 32 << 10
+	if err := validateCredential(strings.Repeat("x", credentialLimit)); err != nil {
+		t.Fatalf("credential at limit: %v", err)
+	}
+	if err := validateCredential(strings.Repeat("x", credentialLimit+1)); err == nil {
+		t.Fatal("credential above environment reader limit was accepted")
+	}
+}
+
+func TestRenewProviderServerCertificateKeepsCAAndServerKeyStable(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	issuedAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	material, err := GenerateInstallMaterial(config, Credentials{GitHubToken: "github-secret", ProviderToken: "provider-secret"}, bytes.NewReader(bytes.Repeat([]byte{0x44}, 4096)), issuedAt)
+	if err != nil {
+		t.Fatalf("generate install material: %v", err)
+	}
+	if err := WriteInstallMaterial(paths, material); err != nil {
+		t.Fatalf("write install material: %v", err)
+	}
+	renewedAt := issuedAt.Add(350 * 24 * time.Hour)
+	renewed, err := renewProviderServerCertificate(config, paths, bytes.NewReader(bytes.Repeat([]byte{0x45}, 4096)), renewedAt)
+	if err != nil {
+		t.Fatalf("renew server certificate: %v", err)
+	}
+	if !renewed {
+		t.Fatal("expiring server certificate was not renewed")
+	}
+	for path, want := range map[string][]byte{paths.CAFile: material.CACert, paths.CAKey: material.CAKey, paths.ServerKey: material.ServerKey} {
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("stable TLS authority %s changed: err=%v", path, err)
+		}
+	}
+	renewedPEM, err := os.ReadFile(paths.ServerCert)
+	if err != nil {
+		t.Fatalf("read renewed server certificate: %v", err)
+	}
+	if bytes.Equal(renewedPEM, material.ServerCert) {
+		t.Fatal("server certificate bytes did not change")
+	}
+	renewedCertificate := parseCertificateForTest(t, renewedPEM)
+	if !renewedCertificate.NotAfter.After(parseCertificateForTest(t, material.ServerCert).NotAfter) {
+		t.Fatalf("renewed expiry = %s", renewedCertificate.NotAfter)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(parseCertificateForTest(t, material.CACert))
+	if _, err := renewedCertificate.Verify(x509.VerifyOptions{Roots: pool, DNSName: config.StableContainer, CurrentTime: renewedAt.Add(time.Hour)}); err != nil {
+		t.Fatalf("verify renewed server certificate: %v", err)
+	}
+	renewed, err = renewProviderServerCertificate(config, paths, bytes.NewReader(bytes.Repeat([]byte{0x46}, 4096)), renewedAt)
+	if err != nil || renewed {
+		t.Fatalf("fresh certificate renewed=%v err=%v", renewed, err)
+	}
+}
+
+func TestProviderServerCertificateRejectsFutureValidity(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	now := time.Date(2026, 7, 14, 0, 0, 0, 0, time.UTC)
+	material, err := GenerateInstallMaterial(config, Credentials{GitHubToken: "github-secret", ProviderToken: "provider-secret"}, nil, now.Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("generate install material: %v", err)
+	}
+	if err := WriteInstallMaterial(paths, material); err != nil {
+		t.Fatalf("write install material: %v", err)
+	}
+
+	caKeyBlock, _ := pem.Decode(material.CAKey)
+	serverKeyBlock, _ := pem.Decode(material.ServerKey)
+	if caKeyBlock == nil || serverKeyBlock == nil {
+		t.Fatal("decode generated private keys")
+	}
+	caKey, err := x509.ParseECPrivateKey(caKeyBlock.Bytes)
+	if err != nil {
+		t.Fatalf("parse CA key: %v", err)
+	}
+	serverKey, err := x509.ParseECPrivateKey(serverKeyBlock.Bytes)
+	if err != nil {
+		t.Fatalf("parse server key: %v", err)
+	}
+	template := *parseCertificateForTest(t, material.ServerCert)
+	template.NotBefore = now.Add(time.Hour)
+	template.NotAfter = now.AddDate(1, 0, 0)
+	der, err := x509.CreateCertificate(bytes.NewReader(bytes.Repeat([]byte{0x47}, 4096)), &template, parseCertificateForTest(t, material.CACert), &serverKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create future-dated server certificate: %v", err)
+	}
+	if err := atomicWriteFile(paths.ServerCert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatalf("write future-dated server certificate: %v", err)
+	}
+
+	if _, err := providerServerCertificateNeedsRenewal(config, paths, now); err == nil || !strings.Contains(err.Error(), "not currently valid") {
+		t.Fatalf("future-dated server certificate err = %v", err)
 	}
 }
 
@@ -298,6 +469,12 @@ func TestInstallTransactionOrdersMaintenanceAgentAndProviderActivation(t *testin
 	statusQueue := []string{"unavailable", "unavailable", "idle"}
 	runner := &recordingCommandRunner{}
 	runner.run = func(_ context.Context, command Command) ([]byte, error) {
+		if command.Path == config.LoginctlPath {
+			return []byte("yes\n"), nil
+		}
+		if command.Path == config.PodmanPath && containsArg(command.Args, "info") {
+			return []byte("true\n"), nil
+		}
 		if command.Path == config.PodmanPath && len(command.Args) >= 2 && command.Args[0] == "image" && command.Args[1] == "inspect" {
 			return []byte(testProviderImageID + "\n"), nil
 		}
@@ -322,13 +499,19 @@ func TestInstallTransactionOrdersMaintenanceAgentAndProviderActivation(t *testin
 			if err != nil || !found || journal.Phase != LifecycleFencing {
 				t.Fatalf("install maintenance begin lifecycle = %+v found=%v err=%v", journal, found, err)
 			}
-			return maintenanceStateJSON(true, installMaintenanceID, config.ProfileID, installMaintenanceReason), nil
+			if !containsAdjacentArgs(command.Args, "-id", journal.TransactionID) {
+				t.Fatalf("install maintenance id is not the lifecycle transaction: %+v", command)
+			}
+			return maintenanceStateJSON(true, journal.TransactionID, config.ProfileID, installMaintenanceReason), nil
 		case "maintenance-end":
 			journal, found, err := readLifecycleJournal(home, paths)
 			if err != nil || !found || journal.Phase != LifecycleReleasing || journal.Outcome != LifecycleCommit || journal.ProviderTransaction == nil {
 				t.Fatalf("install maintenance end lifecycle = %+v found=%v err=%v", journal, found, err)
 			}
-			return maintenanceStateJSON(false, installMaintenanceID, config.ProfileID, installMaintenanceReason), nil
+			if !containsAdjacentArgs(command.Args, "-id", journal.TransactionID) {
+				t.Fatalf("install maintenance release id is not the lifecycle transaction: %+v", command)
+			}
+			return maintenanceStateJSON(false, journal.TransactionID, config.ProfileID, installMaintenanceReason), nil
 		case "local-status":
 			if len(statusQueue) == 0 {
 				t.Fatal("unexpected extra local status read")
@@ -390,6 +573,99 @@ func TestInstallTransactionOrdersMaintenanceAgentAndProviderActivation(t *testin
 	}
 }
 
+func TestInstallHostPreflightRequiresNonRootLingeringAndRootlessPodman(t *testing.T) {
+	config := validTestConfig(t.TempDir())
+	writeLifecycleRecoveryFiles(t, config)
+	for _, tc := range []struct {
+		name         string
+		uid          string
+		linger       string
+		rootless     string
+		want         string
+		wantLoginctl bool
+	}{
+		{name: "root user", uid: "0", want: "non-root"},
+		{name: "linger disabled", uid: "1001", linger: "no\n", rootless: "true\n", want: "lingering", wantLoginctl: true},
+		{name: "rootful podman", uid: "1001", linger: "yes\n", rootless: "false\n", want: "rootless", wantLoginctl: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runner := &recordingCommandRunner{run: func(_ context.Context, command Command) ([]byte, error) {
+				if filepath.Base(command.Path) == "systemctl" && command.Path != config.SystemctlPath {
+					t.Fatalf("systemctl command path = %q want %q", command.Path, config.SystemctlPath)
+				}
+				if filepath.Base(command.Path) == "loginctl" && command.Path != config.LoginctlPath {
+					t.Fatalf("loginctl command path = %q want %q", command.Path, config.LoginctlPath)
+				}
+				switch command.Path {
+				case config.LoginctlPath:
+					return []byte(tc.linger), nil
+				case config.PodmanPath:
+					if containsArg(command.Args, "info") {
+						return []byte(tc.rootless), nil
+					}
+					return []byte("5.5.0\n"), nil
+				default:
+					return nil, nil
+				}
+			}}
+			installer := Installer{Runner: runner, UserID: func() (string, error) { return tc.uid, nil }}
+			err := installer.runSystemPreflight(t.Context(), config)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("preflight error = %v want %q", err, tc.want)
+			}
+			transcript := commandTranscript(runner.commands)
+			if strings.Contains(transcript, "supervisor-update verify") {
+				t.Fatalf("host preflight crossed package verification boundary:\n%s", transcript)
+			}
+			if tc.wantLoginctl != strings.Contains(transcript, "loginctl show-user "+tc.uid+" --property Linger --value") {
+				t.Fatalf("loginctl invocation mismatch:\n%s", transcript)
+			}
+		})
+	}
+}
+
+func TestHostPreflightRejectsUntrustedExecutableBeforeCommands(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	writeLifecycleRecoveryFiles(t, config)
+	if err := os.Chmod(config.PodmanPath, 0o722); err != nil {
+		t.Fatalf("make podman fixture group-writable: %v", err)
+	}
+	runner := &recordingCommandRunner{}
+	installer := Installer{Runner: runner, UserID: func() (string, error) { return "1001", nil }}
+	if err := installer.runSystemPreflight(t.Context(), config); err == nil || !strings.Contains(err.Error(), "writable") {
+		t.Fatalf("untrusted executable preflight err = %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("untrusted executable preflight issued commands: %+v", runner.commands)
+	}
+}
+
+func TestWaitLocalStateRequiresObservationAfterFence(t *testing.T) {
+	config := validTestConfig(t.TempDir())
+	fenceStartedAt := time.Date(2026, 7, 14, 14, 0, 0, 0, time.UTC)
+	statuses := [][]byte{
+		localStatusAtJSON(config.WorkerID, "unavailable", fenceStartedAt.Add(-time.Second)),
+		localStatusAtJSON(config.WorkerID, "unavailable", fenceStartedAt.Add(time.Second)),
+	}
+	reads := 0
+	runner := &recordingCommandRunner{run: func(_ context.Context, command Command) ([]byte, error) {
+		if !containsArg(command.Args, "local-status") {
+			t.Fatalf("unexpected command: %+v", command)
+		}
+		result := statuses[reads]
+		reads++
+		return result, nil
+	}}
+	installer := Installer{Runner: runner, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if err := installer.waitLocalStateAfter(t.Context(), config, "unavailable", fenceStartedAt); err != nil {
+		t.Fatalf("wait for fresh local state: %v", err)
+	}
+	if reads != 2 {
+		t.Fatalf("local status reads = %d want 2", reads)
+	}
+}
+
 func TestInstallReattestsAuthorityAfterDrainBeforeStop(t *testing.T) {
 	home := t.TempDir()
 	config := validTestConfig(home)
@@ -420,6 +696,44 @@ func TestInstallReattestsAuthorityAfterDrainBeforeStop(t *testing.T) {
 	transcript := commandTranscript(runner.commands)
 	if strings.Contains(transcript, "systemctl --user stop "+config.AgentUnit) {
 		t.Fatalf("changed authority crossed install stop boundary:\n%s", transcript)
+	}
+}
+
+func TestInstallFailureEmitsRedactedErrorAndRecoveryAudit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(home, ".state"))
+	config := validTestConfig(home)
+	payload := writeTestProviderPayload(t, home, "verified-provider-audit-failure")
+	digest := fileDigestForTest(t, payload)
+	runner := installSuccessRunner(t, config, payload, digest, new([]string))
+	baseRun := runner.run
+	failed := false
+	runner.run = func(ctx context.Context, command Command) ([]byte, error) {
+		if !failed && installCommandEvent(command, config) == "provider-enable" {
+			failed = true
+			return nil, errors.New("provider-enable-secret-detail")
+		}
+		return baseRun(ctx, command)
+	}
+	installer := Installer{
+		Runner: runner, ExecutablePath: func() (string, error) { return payload, nil },
+		Random: bytes.NewReader(bytes.Repeat([]byte{0x35}, 4096)),
+		Sleep:  func(context.Context, time.Duration) error { return nil },
+	}
+	if _, err := installer.Install(t.Context(), home, config, Credentials{GitHubToken: "github-secret", ProviderToken: "provider-secret"}); err == nil {
+		t.Fatal("install failure was not returned")
+	}
+	audit, err := os.ReadFile(LifecyclePathsFor(config).LifecycleAudit)
+	if err != nil {
+		t.Fatalf("read lifecycle audit: %v", err)
+	}
+	for _, want := range []string{`"kind":"error"`, `"error_class":"operation_failed"`, `"kind":"recovery"`, `"disposition":"resume_fenced"`} {
+		if !bytes.Contains(audit, []byte(want)) {
+			t.Fatalf("lifecycle audit missing %s:\n%s", want, audit)
+		}
+	}
+	if bytes.Contains(audit, []byte("provider-enable-secret-detail")) || bytes.Contains(audit, []byte("github-secret")) || bytes.Contains(audit, []byte("provider-secret")) {
+		t.Fatalf("lifecycle audit leaked failure or credentials:\n%s", audit)
 	}
 }
 
@@ -553,7 +867,7 @@ func TestInstallLockContentionDoesNotMutateMaintenanceOrAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hold install lock: %v", err)
 	}
-	defer lock.Release()
+	defer func() { _ = lock.Release() }()
 	statuses := []string{"unavailable", "unavailable"}
 	runner := installSuccessRunner(t, config, payload, digest, &statuses)
 	installer := Installer{
@@ -637,6 +951,107 @@ func TestInstallCredentialRotationPreservesProviderStateAndWorkerIdentity(t *tes
 	}
 	if config.ProfileID != "github-runner-profile-stg" || config.WorkerID != "github-runner-linux-stg" {
 		t.Fatalf("worker identity changed: %+v", config)
+	}
+}
+
+func TestReinstallMissingActiveImageUsesChangedProviderTransaction(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	payload := writeTestProviderPayload(t, home, "verified-provider-reinstall-repair")
+	digest := fileDigestForTest(t, payload)
+	statuses := []string{"unavailable", "unavailable", "idle", "unavailable", "unavailable", "idle"}
+	runner := installSuccessRunner(t, config, payload, digest, &statuses)
+	baseRun := runner.run
+	imagePresent := false
+	runner.run = func(ctx context.Context, command Command) ([]byte, error) {
+		if command.Path == config.PodmanPath && firstArg(command.Args) == "images" && containsAdjacentArgs(command.Args, "--filter", "id="+testProviderImageID) {
+			if !imagePresent {
+				return nil, nil
+			}
+			return ownedProviderImageInventory(config, digest, testProviderImageID), nil
+		}
+		if command.Path == config.PodmanPath && firstArg(command.Args) == "build" {
+			imagePresent = true
+		}
+		return baseRun(ctx, command)
+	}
+	newInstaller := func() Installer {
+		return Installer{
+			Runner: runner, ExecutablePath: func() (string, error) { return payload, nil },
+			Random: bytes.NewReader(bytes.Repeat([]byte{0x61}, 4096)),
+			Now:    func() time.Time { return time.Unix(1_700_000_000, 0).UTC() },
+			Sleep:  func(context.Context, time.Duration) error { return nil },
+		}
+	}
+	if _, err := newInstaller().Install(t.Context(), home, config, Credentials{GitHubToken: "github-secret", ProviderToken: "provider-secret"}); err != nil {
+		t.Fatalf("initial install: %v", err)
+	}
+	imagePresent = false
+	commandCount := len(runner.commands)
+	if _, err := newInstaller().Install(t.Context(), home, config, Credentials{GitHubToken: "github-secret", ProviderToken: "provider-secret"}); err != nil {
+		t.Fatalf("repairing reinstall: %v\n%s", err, commandTranscript(runner.commands[commandCount:]))
+	}
+	if transcript := commandTranscript(runner.commands[commandCount:]); !strings.Contains(transcript, "podman build") {
+		t.Fatalf("repairing reinstall did not rebuild missing active image:\n%s", transcript)
+	}
+}
+
+func TestReinstallRejectsChangedInstalledConfigBeforeCommands(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	if err := os.MkdirAll(paths.Root, 0o700); err != nil {
+		t.Fatalf("create install root: %v", err)
+	}
+	if err := AtomicWriteJSON(paths.ConfigFile, config); err != nil {
+		t.Fatalf("write installed config: %v", err)
+	}
+	changed := config
+	changed.WorkerID = "different-retained-worker"
+	changed.AgentUnit = "workflow-compute-different-retained-worker.service"
+	changed.Labels = append([]string(nil), config.Labels...)
+
+	runner := &recordingCommandRunner{}
+	installer := Installer{Runner: runner}
+	if _, err := installer.Install(t.Context(), home, changed, Credentials{GitHubToken: "github-new", ProviderToken: "provider-new"}); err == nil || !strings.Contains(err.Error(), "must exactly match") {
+		t.Fatalf("identity-changing reinstall err = %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("identity-changing reinstall issued commands: %+v", runner.commands)
+	}
+}
+
+func TestRefreshAndUninstallRejectChangedInstalledConfigBeforeCommands(t *testing.T) {
+	for _, operation := range []string{"refresh", "uninstall"} {
+		t.Run(operation, func(t *testing.T) {
+			home := t.TempDir()
+			config := validTestConfig(home)
+			paths := LifecyclePathsFor(config)
+			if err := os.MkdirAll(paths.Root, 0o700); err != nil {
+				t.Fatalf("create install root: %v", err)
+			}
+			if err := AtomicWriteJSON(paths.ConfigFile, config); err != nil {
+				t.Fatalf("write installed config: %v", err)
+			}
+			changed := config
+			changed.WorkerID = "different-retained-worker"
+			changed.AgentUnit = "workflow-compute-different-retained-worker.service"
+			changed.Labels = append([]string(nil), config.Labels...)
+			runner := &recordingCommandRunner{}
+			var err error
+			switch operation {
+			case "refresh":
+				_, err = (Refresher{Runner: runner}).Refresh(t.Context(), changed)
+			case "uninstall":
+				_, err = (Installer{Runner: runner}).Uninstall(t.Context(), home, changed, false)
+			}
+			if err == nil || !strings.Contains(err.Error(), "must exactly match") {
+				t.Fatalf("identity-changing %s err = %v", operation, err)
+			}
+			if len(runner.commands) != 0 {
+				t.Fatalf("identity-changing %s issued commands: %+v", operation, runner.commands)
+			}
+		})
 	}
 }
 
@@ -886,9 +1301,10 @@ func TestInstallRollbackPreservesPreviouslyDisabledProviderUnits(t *testing.T) {
 }
 
 func TestRestoreUnitStatePreservesRuntimeEnablement(t *testing.T) {
+	systemctlPath := validTestConfig(t.TempDir()).SystemctlPath
 	runner := &recordingCommandRunner{run: func(context.Context, Command) ([]byte, error) { return nil, nil }}
 	installer := Installer{Runner: runner}
-	if err := installer.restoreUnitState(t.Context(), providerServiceUnit, systemdUnitState{LoadState: "loaded", FragmentPath: "/tmp/provider.service", UnitFileState: "enabled-runtime", ActiveState: "active"}); err != nil {
+	if err := installer.restoreUnitState(t.Context(), systemctlPath, providerServiceUnit, systemdUnitState{LoadState: "loaded", FragmentPath: "/tmp/provider.service", UnitFileState: "enabled-runtime", ActiveState: "active"}); err != nil {
 		t.Fatalf("restore runtime-enabled unit: %v", err)
 	}
 	transcript := commandTranscript(runner.commands)
@@ -906,11 +1322,12 @@ func TestCaptureManagedUnitStatesRejectsUnrestorableSemantics(t *testing.T) {
 		{name: "failed unit", state: systemdUnitState{LoadState: "loaded", FragmentPath: "/tmp/provider.service", UnitFileState: "enabled", ActiveState: "failed"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			systemctlPath := validTestConfig(t.TempDir()).SystemctlPath
 			runner := &recordingCommandRunner{run: func(context.Context, Command) ([]byte, error) {
 				return []byte("LoadState=" + tc.state.LoadState + "\nFragmentPath=" + tc.state.FragmentPath + "\nActiveState=" + tc.state.ActiveState + "\nUnitFileState=" + tc.state.UnitFileState + "\n"), nil
 			}}
 			installer := Installer{Runner: runner}
-			if _, err := installer.captureManagedUnitStates(t.Context()); err == nil || !strings.Contains(err.Error(), "unsupported prior") {
+			if _, err := installer.captureManagedUnitStates(t.Context(), systemctlPath); err == nil || !strings.Contains(err.Error(), "unsupported prior") {
 				t.Fatalf("capture state %+v err = %v", tc.state, err)
 			}
 		})
@@ -918,11 +1335,12 @@ func TestCaptureManagedUnitStatesRejectsUnrestorableSemantics(t *testing.T) {
 }
 
 func TestCaptureManagedUnitStatesIncludesUnitsLoadedOutsideManagedPaths(t *testing.T) {
+	systemctlPath := validTestConfig(t.TempDir()).SystemctlPath
 	fragment := "/usr/lib/systemd/user/vendor-provider.service"
 	runner := &recordingCommandRunner{run: func(context.Context, Command) ([]byte, error) {
 		return []byte("LoadState=loaded\nFragmentPath=" + fragment + "\nActiveState=active\nUnitFileState=enabled\n"), nil
 	}}
-	states, err := (Installer{Runner: runner}).captureManagedUnitStates(t.Context())
+	states, err := (Installer{Runner: runner}).captureManagedUnitStates(t.Context(), systemctlPath)
 	if err != nil {
 		t.Fatalf("capture loaded units: %v", err)
 	}
@@ -1014,7 +1432,7 @@ func TestInstallRecoversDeferredCommittedRefreshAfterProcessRestart(t *testing.T
 	payload := writeTestProviderPayload(t, home, "verified-provider-deferred-install-recovery")
 	digest := fileDigestForTest(t, payload)
 	now := time.Unix(1_700_300_000, 0).UTC()
-	selection := selectionForDigest(payload, digest, "v1.0.32", "directive-deferred-recovery", "sha256:"+strings.Repeat("d", 64), now)
+	selection := selectionForDigest(payload, digest, "v1.0.32", "directive-deferred-recovery", testProviderImageID, now)
 	active := ActiveState{ProtocolVersion: ActiveStateProtocolVersion, Current: selection, UpdatedAt: now}
 	if err := AtomicWriteJSON(paths.ActiveState, active); err != nil {
 		t.Fatalf("write committed active state: %v", err)
@@ -1066,6 +1484,58 @@ func TestInstallRecoversDeferredCommittedRefreshAfterProcessRestart(t *testing.T
 	}
 	if transcript := commandTranscript(runner.commands); !strings.Contains(transcript, "supervisor-maintenance end") {
 		t.Fatalf("recovered install did not release maintenance:\n%s", transcript)
+	}
+}
+
+func TestRecoverInstallRejectsCrossWorkerDeferredJournalBeforeMutation(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	now := time.Unix(1_700_300_000, 0).UTC()
+	payload := writeTestProviderPayload(t, home, "cross-worker-deferred-recovery")
+	digest := fileDigestForTest(t, payload)
+	selection := selectionForDigest(payload, digest, "v1.0.32", "directive-cross-worker", "sha256:"+strings.Repeat("d", 64), now)
+	selection.Update.WorkerID = "other-retained-worker"
+	providerJournal := TransactionJournal{
+		ProtocolVersion: TransactionJournalProtocolVersion,
+		ID:              "refresh-cross-worker-deferred",
+		Phase:           JournalCommitted,
+		DeferredCommit:  true,
+		Candidate:       selection,
+		StartedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := AtomicWriteJSON(paths.Journal, providerJournal); err != nil {
+		t.Fatalf("write cross-worker provider journal: %v", err)
+	}
+	transactionRoot := filepath.Dir(paths.CandidateState(digest))
+	if err := os.MkdirAll(transactionRoot, 0o700); err != nil {
+		t.Fatalf("create provider transaction root: %v", err)
+	}
+	sentinel := filepath.Join(transactionRoot, "must-remain")
+	if err := os.WriteFile(sentinel, []byte("retained"), 0o600); err != nil {
+		t.Fatalf("write provider transaction sentinel: %v", err)
+	}
+	snapshots, err := snapshotManagedFiles(paths)
+	if err != nil {
+		t.Fatalf("snapshot outer install: %v", err)
+	}
+	outer := newInstallTransactionJournal("install", snapshots, map[string]systemdUnitState{}, now)
+	outer.Phase = installTransactionCommitted
+	if err := writeInstallTransactionJournal(paths, outer); err != nil {
+		t.Fatalf("write outer install journal: %v", err)
+	}
+	runner := &recordingCommandRunner{}
+
+	err = (Installer{Runner: runner}).recoverInstallTransaction(t.Context(), config, paths, Refresher{Runner: runner})
+	if err == nil || !strings.Contains(err.Error(), "identity") {
+		t.Fatalf("cross-worker deferred recovery err = %v", err)
+	}
+	if len(runner.commands) != 0 {
+		t.Fatalf("cross-worker deferred recovery issued commands: %+v", runner.commands)
+	}
+	if data, readErr := os.ReadFile(sentinel); readErr != nil || string(data) != "retained" {
+		t.Fatalf("cross-worker deferred recovery mutated transaction state: %q err=%v", data, readErr)
 	}
 }
 
@@ -1331,7 +1801,7 @@ func TestUninstallCleanupFailureStillReleasesMaintenance(t *testing.T) {
 	home := t.TempDir()
 	config := validTestConfig(home)
 	paths := LifecyclePathsFor(config)
-	if err := atomicWriteFile(paths.ConfigFile, []byte("previous-config\n"), 0o600); err != nil {
+	if err := AtomicWriteJSON(paths.ConfigFile, config); err != nil {
 		t.Fatalf("write previous config: %v", err)
 	}
 	statuses := []string{"unavailable", "unavailable"}
@@ -1475,6 +1945,7 @@ func TestInstallBoundsTransientLocalStatusPolling(t *testing.T) {
 func TestInstallerStatusReportsOnlyLocalRedactedLifecycleState(t *testing.T) {
 	home := t.TempDir()
 	config := validTestConfig(home)
+	writeLifecycleRecoveryFiles(t, config)
 	paths := LifecyclePathsFor(config)
 	active := previousActiveStateForTest(t, home)
 	if err := AtomicWriteJSON(paths.ActiveState, active); err != nil {
@@ -1567,12 +2038,47 @@ func TestRollbackInstallPreservesSnapshotsUntilAgentAndMaintenanceRestore(t *tes
 		return nil, nil
 	}}
 	snapshots := []managedFileSnapshot{{Path: destination, Backup: backup, Mode: 0o600, Existed: true}}
-	err := (Installer{Runner: runner}).rollbackInstall(t.Context(), config, snapshots, map[string]systemdUnitState{}, true, true, installMaintenanceID, systemdActivation{})
+	err := (Installer{Runner: runner}).rollbackInstall(t.Context(), config, snapshots, map[string]systemdUnitState{}, true, true, installMaintenanceID, installMaintenanceReason, systemdActivation{})
 	if err == nil || !strings.Contains(err.Error(), "agent restart failed") {
 		t.Fatalf("rollback err = %v", err)
 	}
 	if data, err := os.ReadFile(backup); err != nil || string(data) != "ORIGINAL_AGENT_ENV=1\n" {
 		t.Fatalf("rollback discarded retry backup = %q err=%v", data, err)
+	}
+}
+
+func TestRollbackInstallBeforeStartRetainsSnapshotsForLifecycleCommit(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	backupRoot := filepath.Join(config.InstallRoot, ".install-backup-lifecycle")
+	backup := filepath.Join(backupRoot, "0")
+	destination := LifecyclePathsFor(config).AgentEnv
+	if err := atomicWriteFile(backup, []byte("ORIGINAL_AGENT_ENV=1\n"), 0o600); err != nil {
+		t.Fatalf("write backup: %v", err)
+	}
+	if err := atomicWriteFile(destination, []byte("PARTIAL_AGENT_ENV=1\n"), 0o600); err != nil {
+		t.Fatalf("write partial destination: %v", err)
+	}
+	snapshots := []managedFileSnapshot{{Path: destination, Backup: backup, Mode: 0o600, Existed: true}}
+	if err := (Installer{Runner: &recordingCommandRunner{}}).rollbackInstallBeforeStart(
+		t.Context(), config, snapshots, map[string]systemdUnitState{}, true, false, "", "", systemdActivation{}, func(ctx context.Context) error {
+			deadline, ok := ctx.Deadline()
+			if !ok {
+				t.Fatal("rollback callback has no deadline")
+			}
+			if remaining := time.Until(deadline); remaining < 2*controlCommandTimeout {
+				t.Fatalf("rollback callback deadline = %s want at least %s", remaining, 2*controlCommandTimeout)
+			}
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("rollback before lifecycle commit: %v", err)
+	}
+	if data, err := os.ReadFile(backup); err != nil || string(data) != "ORIGINAL_AGENT_ENV=1\n" {
+		t.Fatalf("lifecycle rollback discarded durable backup = %q err=%v", data, err)
+	}
+	if data, err := os.ReadFile(destination); err != nil || string(data) != "ORIGINAL_AGENT_ENV=1\n" {
+		t.Fatalf("lifecycle rollback did not restore destination = %q err=%v", data, err)
 	}
 }
 
@@ -1677,7 +2183,7 @@ func TestUninstallLockContentionDoesNotMutateMaintenanceOrAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("hold install lock: %v", err)
 	}
-	defer lock.Release()
+	defer func() { _ = lock.Release() }()
 	runner := installSuccessRunner(t, config, "", "", new([]string))
 	installer := Installer{Runner: runner, Sleep: func(context.Context, time.Duration) error { return nil }}
 	if _, err := installer.Uninstall(t.Context(), home, config, false); !errors.Is(err, ErrInstallLocked) {
@@ -1697,11 +2203,20 @@ func installSuccessRunner(t *testing.T, config Config, payload, digest string, s
 	activeMaintenanceReason := ""
 	runner := &recordingCommandRunner{}
 	runner.run = func(_ context.Context, command Command) ([]byte, error) {
+		if command.Path == config.LoginctlPath {
+			return []byte("yes\n"), nil
+		}
 		if installCommandEvent(command, config) == "agent-signature" {
 			return agentUnitSystemdOutputForTest(t, config), nil
 		}
+		if command.Path == config.PodmanPath && containsArg(command.Args, "info") {
+			return []byte("true\n"), nil
+		}
 		if command.Path == config.PodmanPath && len(command.Args) >= 2 && command.Args[0] == "image" && command.Args[1] == "inspect" {
 			return []byte(testProviderImageID + "\n"), nil
+		}
+		if command.Path == config.PodmanPath && firstArg(command.Args) == "images" && containsAdjacentArgs(command.Args, "--filter", "id="+testProviderImageID) {
+			return ownedProviderImageInventory(config, digest, testProviderImageID), nil
 		}
 		if command.Path == config.PodmanPath && len(command.Args) >= 2 && command.Args[0] == "network" && command.Args[1] == "inspect" {
 			return []byte("bridge true false\n"), nil
@@ -1729,11 +2244,8 @@ func installSuccessRunner(t *testing.T, config Config, payload, digest string, s
 			return testVerifiedUpdateJSON(config, payload, digest), nil
 		case "maintenance-begin":
 			maintenanceActive = true
-			reason := installMaintenanceReason
-			id := installMaintenanceID
-			if containsArg(command.Args, uninstallMaintenanceID) {
-				reason, id = uninstallMaintenanceReason, uninstallMaintenanceID
-			}
+			id := adjacentArgValue(command.Args, "-id")
+			reason := adjacentArgValue(command.Args, "-reason")
 			activeMaintenanceID, activeMaintenanceReason = id, reason
 			return maintenanceStateJSON(true, id, config.ProfileID, reason), nil
 		case "maintenance-status":
@@ -1743,10 +2255,15 @@ func installSuccessRunner(t *testing.T, config Config, payload, digest string, s
 			return maintenanceStateJSON(true, activeMaintenanceID, config.ProfileID, activeMaintenanceReason), nil
 		case "maintenance-end":
 			maintenanceActive = false
-			id := installMaintenanceID
-			reason := installMaintenanceReason
-			if containsArg(command.Args, uninstallMaintenanceID) {
-				id, reason = uninstallMaintenanceID, uninstallMaintenanceReason
+			id, reason := activeMaintenanceID, activeMaintenanceReason
+			if id == "" {
+				id = adjacentArgValue(command.Args, "-id")
+				switch id {
+				case installMaintenanceID:
+					reason = installMaintenanceReason
+				case uninstallMaintenanceID:
+					reason = uninstallMaintenanceReason
+				}
 			}
 			return maintenanceStateJSON(false, id, config.ProfileID, reason), nil
 		case "local-status":
@@ -1816,7 +2333,20 @@ func maintenanceStateJSON(active bool, id, profileID, reason string) []byte {
 }
 
 func localStatusJSON(workerID, state string) []byte {
-	return []byte(`{"protocol_version":"compute.local_status.v1","worker_id":"` + workerID + `","state":"` + state + `","updated_at":"2026-07-13T00:00:00Z"}`)
+	return []byte(`{"protocol_version":"compute.local_status.v1","worker_id":"` + workerID + `","state":"` + state + `","updated_at":"2099-01-01T00:00:00Z"}`)
+}
+
+func localStatusAtJSON(workerID, state string, updatedAt time.Time) []byte {
+	return []byte(`{"protocol_version":"compute.local_status.v1","worker_id":"` + workerID + `","state":"` + state + `","updated_at":` + strconv.Quote(updatedAt.UTC().Format(time.RFC3339Nano)) + `}`)
+}
+
+func adjacentArgValue(args []string, key string) string {
+	for index := 0; index+1 < len(args); index++ {
+		if args[index] == key {
+			return args[index+1]
+		}
+	}
+	return ""
 }
 
 func assertOrderedEvents(t *testing.T, events, expected []string) {

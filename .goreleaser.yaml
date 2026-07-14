@@ -74,6 +74,9 @@ archives:
       - schemas/github-runner-provider.schema.json
       - schemas/github-runner-ephemeral-job-input.schema.json
       - schemas/github-runner-ephemeral-job-output.schema.json
+      - schemas/github-runner-retained-config.schema.json
+      - examples/github-runner-retained-config.json
+      - README.md
       - LICENSE
 
 checksum:

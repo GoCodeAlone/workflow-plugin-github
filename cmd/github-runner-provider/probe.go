@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-github/internal"
+	"github.com/GoCodeAlone/workflow-plugin-github/internal/retainedprovider"
 )
 
 const (
@@ -196,8 +197,8 @@ func validateProviderProbeFlags(rawURL, caFile, organization, repository, workfl
 	if len(runnerName) > 100 || !safeProviderProbeIdentifier(runnerName) {
 		return nil, errors.New("provider runner name is invalid")
 	}
-	if len(labels) == 0 {
-		return nil, errors.New("at least one -label is required")
+	if len(labels) == 0 || len(labels) > retainedprovider.MaxProviderProbeLabels {
+		return nil, fmt.Errorf("between 1 and %d -label values are required", retainedprovider.MaxProviderProbeLabels)
 	}
 	seen := make(map[string]struct{}, len(labels))
 	for _, label := range labels {
@@ -230,7 +231,13 @@ func newProviderProbeHTTPClient(caFile string) (*http.Client, error) {
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
-	return &http.Client{Transport: transport, Timeout: providerProbeHTTPTimeout}, nil
+	return &http.Client{
+		Transport: transport,
+		Timeout:   providerProbeHTTPTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("provider probe redirects are forbidden")
+		},
+	}, nil
 }
 
 func providerProbeJSON(ctx context.Context, client *http.Client, method string, endpoint *url.URL, token string, input, output any) error {
@@ -254,7 +261,7 @@ func providerProbeJSON(ctx context.Context, client *http.Client, method string, 
 	if err != nil {
 		return fmt.Errorf("provider request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, providerProbeMaxBodyBytes))
 		return fmt.Errorf("provider returned HTTP status %d", resp.StatusCode)

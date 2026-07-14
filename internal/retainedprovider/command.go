@@ -14,11 +14,28 @@ import (
 )
 
 const (
-	defaultCommandOutputBytes = 1 << 20
-	controlCommandTimeout     = 30 * time.Second
-	containerStartTimeout     = time.Minute
-	providerProbeTimeout      = 2 * time.Minute
-	providerBuildTimeout      = 10 * time.Minute
+	defaultCommandOutputBytes          = 1 << 20
+	controlCommandTimeout              = 30 * time.Second
+	containerStartTimeout              = time.Minute
+	providerProbeTimeout               = 2 * time.Minute
+	providerBuildTimeout               = 10 * time.Minute
+	providerProbeAttemptCount          = 5
+	providerProbeDelay1                = 250 * time.Millisecond
+	providerProbeDelay2                = 500 * time.Millisecond
+	providerProbeDelay3                = time.Second
+	providerProbeDelay4                = 2 * time.Second
+	providerProbeBudget                = providerProbeAttemptCount*providerProbeTimeout + providerProbeDelay1 + providerProbeDelay2 + providerProbeDelay3 + providerProbeDelay4
+	managedContainerCleanupTimeout     = 2 * controlCommandTimeout
+	providerProbeCleanupBudget         = 2 * providerProbeAttemptCount * managedContainerCleanupTimeout
+	managedProviderProbeBudget         = providerProbeBudget + providerProbeCleanupBudget
+	localStatusWaitBudget              = localStatusAttempts*controlCommandTimeout + (localStatusAttempts-1)*time.Second
+	retainedOperationMargin            = 20*controlCommandTimeout + 5*time.Minute
+	retainedRefreshTimeout             = 3*localStatusWaitBudget + providerBuildTimeout + 2*managedProviderProbeBudget + 2*containerStartTimeout + retainedOperationMargin
+	retainedRollbackTimeout            = managedProviderProbeBudget + 6*controlCommandTimeout + 5*time.Minute
+	lifecycleRecoveryTimeout           = retainedRollbackTimeout + 4*localStatusWaitBudget + 16*controlCommandTimeout + 5*time.Minute
+	installRollbackTimeout             = 12*controlCommandTimeout + 5*time.Minute
+	retainedRefreshServiceStartTimeout = 2*lifecycleRecoveryTimeout + retainedRollbackTimeout + installRollbackTimeout + retainedRefreshTimeout
+	retainedRefreshServiceStopTimeout  = lifecycleRecoveryTimeout
 )
 
 type Command struct {
