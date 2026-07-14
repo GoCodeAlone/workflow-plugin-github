@@ -149,6 +149,34 @@ func TestCloneRegularTreeCopiesOnlyBoundedRegularFiles(t *testing.T) {
 	}
 }
 
+func TestCloneRegularTreeSyncsCreatedDirectoriesBottomUp(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "source")
+	if err := os.MkdirAll(filepath.Join(source, "nested", "deep"), 0o700); err != nil {
+		t.Fatalf("mkdir source: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "nested", "deep", "state.json"), []byte(`{"ok":true}`), 0o600); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+	destinationParent := t.TempDir()
+	destination := filepath.Join(destinationParent, "destination")
+	var synced []string
+	if err := cloneRegularTreeWithSync(source, destination, CloneLimits{MaxFiles: 10, MaxBytes: 1024}, func(path string) error {
+		synced = append(synced, filepath.Clean(path))
+		return nil
+	}); err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+	want := []string{
+		filepath.Join(destination, "nested", "deep"),
+		filepath.Join(destination, "nested"),
+		destination,
+		destinationParent,
+	}
+	if strings.Join(synced, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("directory sync order = %v want %v", synced, want)
+	}
+}
+
 func TestInstallLockIsExclusive(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "install.lock")
 	first, err := AcquireInstallLock(path)
@@ -186,6 +214,29 @@ func TestInstallLockRejectsSymlink(t *testing.T) {
 	}
 	if _, err := AcquireInstallLock(linked); err == nil || !strings.Contains(err.Error(), "regular") {
 		t.Fatalf("symlink lock err = %v", err)
+	}
+}
+
+func TestLifecycleLockRemainsExclusiveWhileInstallRootIsPurged(t *testing.T) {
+	home := t.TempDir()
+	paths := LifecyclePathsFor(validTestConfig(home))
+	if err := os.MkdirAll(paths.Root, 0o700); err != nil {
+		t.Fatalf("mkdir install root: %v", err)
+	}
+	lock, err := AcquireInstallLock(paths.InstallLock)
+	if err != nil {
+		t.Fatalf("acquire lifecycle lock: %v", err)
+	}
+	defer lock.Release()
+	if err := os.RemoveAll(paths.Root); err != nil {
+		t.Fatalf("purge install root: %v", err)
+	}
+	contender, err := AcquireInstallLock(paths.InstallLock)
+	if contender != nil {
+		_ = contender.Release()
+	}
+	if !errors.Is(err, ErrInstallLocked) {
+		t.Fatalf("contender acquired replacement lock inode: %v", err)
 	}
 }
 

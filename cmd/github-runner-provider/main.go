@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-github/internal"
+	_ "golang.org/x/crypto/x509roots/fallback"
 )
 
 const providerShutdownTimeout = 10 * time.Second

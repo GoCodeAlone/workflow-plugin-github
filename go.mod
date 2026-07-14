@@ -5,10 +5,12 @@ go 1.26.4
 require (
 	github.com/GoCodeAlone/workflow v0.64.0
 	github.com/GoCodeAlone/workflow-plugin-compute-core v0.8.3
+	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-github/v69 v69.2.0
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
 	golang.org/x/crypto v0.51.0
+	golang.org/x/crypto/x509roots/fallback v0.0.0-20260712151947-c1a3b97d708a
 	golang.org/x/sys v0.44.0
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 )

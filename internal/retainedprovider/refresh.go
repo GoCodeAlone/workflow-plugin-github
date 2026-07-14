@@ -30,38 +30,85 @@ const (
 var providerContainerfile = []byte("FROM scratch\nCOPY --chmod=0555 github-runner-provider /github-runner-provider\nENTRYPOINT [\"/github-runner-provider\"]\n")
 
 type LifecyclePaths struct {
-	Root           string
-	ActiveState    string
-	Journal        string
-	InstallLock    string
-	ProviderState  string
-	PackagesRoot   string
-	CandidatesRoot string
-	ProviderEnv    string
-	ProbeEnv       string
-	TLSRoot        string
-	CAFile         string
+	Root                  string
+	ConfigFile            string
+	Launcher              string
+	ActiveState           string
+	Journal               string
+	InstallLock           string
+	InstallJournal        string
+	LifecycleJournal      string
+	LifecycleTransactions string
+	LifecycleAudit        string
+	LifecycleAuditLock    string
+	ProviderState         string
+	PackagesRoot          string
+	CandidatesRoot        string
+	ProviderEnv           string
+	ProbeEnv              string
+	AgentEnv              string
+	TLSRoot               string
+	CAFile                string
+	ServerCert            string
+	ServerKey             string
+	ContainersConf        string
+	ProviderUnit          string
+	RefreshUnit           string
+	PathUnit              string
+	TimerUnit             string
+	AgentDropIn           string
 }
 
 func LifecyclePathsFor(config Config) LifecyclePaths {
 	root := config.InstallRoot
-	return LifecyclePaths{
-		Root:           root,
-		ActiveState:    filepath.Join(root, "lifecycle", "active.json"),
-		Journal:        filepath.Join(root, "lifecycle", "transaction.json"),
-		InstallLock:    filepath.Join(root, "lifecycle", "install.lock"),
-		ProviderState:  filepath.Join(root, "provider-state"),
-		PackagesRoot:   filepath.Join(root, "packages"),
-		CandidatesRoot: filepath.Join(root, "candidates"),
-		ProviderEnv:    filepath.Join(root, "secrets", "provider.env"),
-		ProbeEnv:       filepath.Join(root, "secrets", "probe.env"),
-		TLSRoot:        filepath.Join(root, "tls"),
-		CAFile:         filepath.Join(root, "tls", "ca.pem"),
+	workspaceRoot := filepath.Dir(root)
+	home := filepath.Dir(workspaceRoot)
+	stateHome := os.Getenv("XDG_STATE_HOME")
+	if stateHome == "" {
+		stateHome = filepath.Join(home, ".local", "state")
 	}
+	audit := filepath.Join(stateHome, "wfctl", "plugins", GitHubPluginID, "retained-provider-audit.jsonl")
+	return LifecyclePaths{
+		Root:                  root,
+		ConfigFile:            filepath.Join(root, "config.json"),
+		Launcher:              filepath.Join(root, "bin", "github-runner-provider"),
+		ActiveState:           filepath.Join(root, "lifecycle", "active.json"),
+		Journal:               filepath.Join(root, "lifecycle", "transaction.json"),
+		InstallLock:           filepath.Join(filepath.Dir(root), ".workflow-plugin-github-runner-provider.install.lock"),
+		InstallJournal:        filepath.Join(filepath.Dir(root), ".workflow-plugin-github-runner-provider.install-transaction.json"),
+		LifecycleJournal:      filepath.Join(workspaceRoot, ".workflow-plugin-github-runner-provider.lifecycle-transaction.json"),
+		LifecycleTransactions: filepath.Join(workspaceRoot, ".workflow-plugin-github-runner-provider-transactions"),
+		LifecycleAudit:        audit,
+		LifecycleAuditLock:    audit + ".lock",
+		ProviderState:         filepath.Join(root, "provider-state"),
+		PackagesRoot:          filepath.Join(root, "packages"),
+		CandidatesRoot:        filepath.Join(root, "candidates"),
+		ProviderEnv:           filepath.Join(root, "secrets", "provider.env"),
+		ProbeEnv:              filepath.Join(root, "secrets", "probe.env"),
+		AgentEnv:              filepath.Join(root, "secrets", "agent.env"),
+		TLSRoot:               filepath.Join(root, "tls"),
+		CAFile:                filepath.Join(root, "tls", "ca.pem"),
+		ServerCert:            filepath.Join(root, "tls", "server.crt"),
+		ServerKey:             filepath.Join(root, "tls", "server.key"),
+		ContainersConf:        filepath.Join(root, "runtime", "containers.conf"),
+		ProviderUnit:          filepath.Join(config.SystemdDir, providerServiceUnit),
+		RefreshUnit:           filepath.Join(config.SystemdDir, refreshServiceUnit),
+		PathUnit:              filepath.Join(config.SystemdDir, refreshPathUnit),
+		TimerUnit:             filepath.Join(config.SystemdDir, refreshTimerUnit),
+		AgentDropIn:           filepath.Join(config.SystemdDir, config.AgentUnit+".d", "50-workflow-plugin-github-runner-provider.conf"),
+	}
+}
+
+func (paths LifecyclePaths) LifecycleTransactionRoot(transactionID string) string {
+	return filepath.Join(paths.LifecycleTransactions, transactionID)
 }
 
 func (paths LifecyclePaths) CandidateState(digest string) string {
 	return filepath.Join(paths.CandidatesRoot, digestHex(digest), "state")
+}
+
+func (paths LifecyclePaths) PreviousState(digest string) string {
+	return filepath.Join(paths.CandidatesRoot, digestHex(digest), "previous-state")
 }
 
 func (paths LifecyclePaths) PackageDir(digest string) string {
@@ -87,7 +134,7 @@ func (refresher Refresher) Refresh(ctx context.Context, config Config) (status S
 	if err := validateInstallRoot(paths.Root); err != nil {
 		return Status{}, err
 	}
-	if err := ValidateUserPath(paths.Root, paths.InstallLock, false); err != nil {
+	if err := ValidateUserPath(filepath.Dir(paths.Root), paths.InstallLock, false); err != nil {
 		return Status{}, fmt.Errorf("install lock path: %w", err)
 	}
 	lock, err := AcquireInstallLock(paths.InstallLock)
@@ -95,6 +142,202 @@ func (refresher Refresher) Refresh(ctx context.Context, config Config) (status S
 		return Status{}, err
 	}
 	defer func() { returnErr = errors.Join(returnErr, lock.Release()) }()
+	home := lifecycleHome(paths)
+	installer := Installer{Runner: refresher.Runner, Now: refresher.Now, Sleep: refresher.Sleep}
+	if err := installer.recoverLifecycleTransaction(ctx, home, paths, refresher); err != nil {
+		return Status{}, err
+	}
+	if err := installer.recoverInstallTransaction(ctx, config, paths, refresher); err != nil {
+		return Status{}, err
+	}
+	requiresMutation, err := refresher.requiresMutation(ctx, config, paths)
+	if err != nil {
+		return Status{}, err
+	}
+	if !requiresMutation {
+		return refresher.refreshUnchangedUnderLifecycleLock(ctx, home, config, paths)
+	}
+	return refresher.refreshFencedUnderLifecycleLock(ctx, home, config, paths)
+}
+
+func (refresher Refresher) refreshUnchangedUnderLifecycleLock(ctx context.Context, home string, config Config, paths LifecyclePaths) (Status, error) {
+	update, err := VerifyCurrentUpdate(ctx, config, refresher.Runner)
+	if err != nil {
+		return Status{}, err
+	}
+	active, found, err := readActiveState(paths.ActiveState)
+	if err != nil {
+		return Status{}, err
+	}
+	if !found || active.Current.Update.SHA256 != update.SHA256 {
+		return refresher.refreshFencedUnderLifecycleLock(ctx, home, config, paths)
+	}
+	installer := Installer{Runner: refresher.Runner, Now: refresher.Now, Sleep: refresher.Sleep}
+	transaction, err := newLifecycleJournal(config, LifecycleRefresh, ProviderUnchanged, nil, refresher.now())
+	if err != nil {
+		return Status{}, err
+	}
+	signature, err := installer.inspectAgentUnitSignature(ctx, home, config)
+	if err != nil {
+		return Status{}, err
+	}
+	transaction.Recovery.AgentUnitBefore = signature
+	transaction.Unchanged = &LifecycleUnchangedProvenance{Active: active.Current, Candidate: update}
+	if err := startLifecycleTransaction(home, paths, &transaction); err != nil {
+		return Status{}, err
+	}
+	status, err := refresher.refreshUnderLifecycleTransaction(ctx, config, true, false, "", "", update.SHA256)
+	if err != nil {
+		return Status{}, errors.Join(err, finishLifecycleTransaction(home, paths, &transaction))
+	}
+	transaction.Unchanged.StableProbeAt = refresher.now()
+	if err := writeLifecycleTransition(home, paths, &transaction, LifecycleReady, LifecycleCommit, refresher.now()); err != nil {
+		return Status{}, err
+	}
+	if err := writeLifecycleTransition(home, paths, &transaction, LifecycleReleasing, LifecycleCommit, refresher.now()); err != nil {
+		return Status{}, err
+	}
+	_ = drainLifecycleAudit(home, paths, &transaction)
+	if err := writeLifecycleTransition(home, paths, &transaction, LifecycleCommitted, LifecycleCommit, refresher.now()); err != nil {
+		return Status{}, err
+	}
+	if err := finalizeLifecycleTransaction(home, paths, &transaction, refresher); err != nil {
+		return Status{}, err
+	}
+	return status, nil
+}
+
+func (refresher Refresher) requiresMutation(ctx context.Context, config Config, paths LifecyclePaths) (bool, error) {
+	update, err := VerifyCurrentUpdate(ctx, config, refresher.Runner)
+	if err != nil {
+		return false, err
+	}
+	active, found, err := readActiveState(paths.ActiveState)
+	if err != nil {
+		return false, err
+	}
+	if !found {
+		if err := refresher.validateInitialInstaller(update); err != nil {
+			return false, err
+		}
+	}
+	return !found || active.Current.Update.SHA256 != update.SHA256, nil
+}
+
+func (refresher Refresher) validateInitialInstaller(update VerifiedUpdate) error {
+	executablePath := refresher.ExecutablePath
+	if executablePath == nil {
+		executablePath = os.Executable
+	}
+	currentExecutable, err := executablePath()
+	if err != nil {
+		return fmt.Errorf("resolve installer executable: %w", err)
+	}
+	digest, err := hashRegularFile(currentExecutable, true)
+	if err != nil {
+		return fmt.Errorf("hash installer executable: %w", err)
+	}
+	if digest != update.SHA256 {
+		return errors.New("installer digest does not match verified provider update")
+	}
+	return nil
+}
+
+func (refresher Refresher) refreshFencedUnderLifecycleLock(ctx context.Context, home string, config Config, paths LifecyclePaths) (Status, error) {
+	installer := Installer{Runner: refresher.Runner, Now: refresher.Now, Sleep: refresher.Sleep}
+	transaction, err := newLifecycleJournal(config, LifecycleRefresh, ProviderChanged, nil, refresher.now())
+	if err != nil {
+		return Status{}, err
+	}
+	beforeSignature, err := installer.inspectAgentUnitSignature(ctx, home, config)
+	if err != nil {
+		return Status{}, err
+	}
+	transaction.Recovery.AgentUnitBefore = beforeSignature
+	if err := startLifecycleTransaction(home, paths, &transaction); err != nil {
+		return Status{}, err
+	}
+	if err := writeLifecycleTransition(home, paths, &transaction, LifecycleFencing, "", refresher.now()); err != nil {
+		return Status{}, err
+	}
+	fail := func(cause error) (Status, error) {
+		rollbackContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		return Status{}, errors.Join(cause, installer.recoverLifecycleTransaction(rollbackContext, home, paths, refresher))
+	}
+	if err := installer.beginMaintenance(ctx, config, refreshMaintenanceID, refreshMaintenanceReason); err != nil {
+		return fail(err)
+	}
+	if err := installer.waitLocalState(ctx, config, "unavailable"); err != nil {
+		return Status{}, fmt.Errorf("wait for retained agent refresh fence: %w", err)
+	}
+	if err := installer.reattestLifecycleAuthority(ctx, home, transaction); err != nil {
+		return Status{}, err
+	}
+	if err := writeLifecycleTransition(home, paths, &transaction, LifecycleFenced, "", refresher.now()); err != nil {
+		return fail(err)
+	}
+	if err := installer.systemctl(ctx, "stop", config.AgentUnit); err != nil {
+		return fail(fmt.Errorf("stop retained agent for provider refresh: %w", err))
+	}
+	status, err := refresher.refreshUnderLifecycleTransaction(ctx, config, true, true, transaction.TransactionID, config.ProfileID, "")
+	if err != nil {
+		return fail(err)
+	}
+	inner, found, err := readTransactionJournal(paths.Journal)
+	if err != nil || !found || inner.Phase != JournalCommitted {
+		return fail(errors.Join(errors.New("provider refresh did not leave a deferred committed transaction"), err))
+	}
+	transaction.ProviderTransaction = &LifecycleProviderTransaction{
+		TransactionID: inner.ID, ProfileID: config.ProfileID, Digest: inner.Candidate.Update.SHA256,
+	}
+	transaction.UpdatedAt = refresher.now()
+	if err := writeLifecycleJournal(home, paths, transaction); err != nil {
+		return fail(err)
+	}
+	if err := installer.reattestLifecycleAuthority(ctx, home, transaction); err != nil {
+		return fail(err)
+	}
+	if err := installer.systemctl(ctx, "start", config.AgentUnit); err != nil {
+		return fail(fmt.Errorf("restart retained agent after provider refresh: %w", err))
+	}
+	if err := installer.waitLocalState(ctx, config, "unavailable"); err != nil {
+		return fail(fmt.Errorf("verify retained agent remains refresh-fenced: %w", err))
+	}
+	if err := installer.reattestLifecycleAuthority(ctx, home, transaction); err != nil {
+		return fail(err)
+	}
+	if err := writeLifecycleTransition(home, paths, &transaction, LifecycleReady, LifecycleCommit, refresher.now()); err != nil {
+		return fail(err)
+	}
+	if err := writeLifecycleTransition(home, paths, &transaction, LifecycleReleasing, LifecycleCommit, refresher.now()); err != nil {
+		return fail(err)
+	}
+	_ = drainLifecycleAudit(home, paths, &transaction)
+	if err := installer.releaseLifecycleMaintenance(ctx, home, transaction); err != nil {
+		return Status{}, fmt.Errorf("release retained agent refresh fence: %w", err)
+	}
+	if err := writeLifecycleTransition(home, paths, &transaction, LifecycleCommitted, LifecycleCommit, refresher.now()); err != nil {
+		return Status{}, err
+	}
+	if err := finalizeLifecycleTransaction(home, paths, &transaction, refresher); err != nil {
+		return Status{}, err
+	}
+	if err := installer.waitLocalState(ctx, config, "idle"); err != nil {
+		return Status{}, fmt.Errorf("wait for retained agent after provider refresh: %w", err)
+	}
+	return status, nil
+}
+
+func (refresher Refresher) refreshUnderLifecycleLock(ctx context.Context, config Config, verifyCurrent, deferCommit bool) (Status, error) {
+	return refresher.refreshUnderLifecycleTransaction(ctx, config, verifyCurrent, deferCommit, "", "", "")
+}
+
+func (refresher Refresher) refreshUnderLifecycleTransaction(ctx context.Context, config Config, verifyCurrent, deferCommit bool, outerTransactionID, profileID, expectedDigest string) (Status, error) {
+	if refresher.Runner == nil {
+		return Status{}, errors.New("command runner is required")
+	}
+	paths := LifecyclePathsFor(config)
 	if err := refresher.recoverInterrupted(ctx, config, paths); err != nil {
 		return Status{}, err
 	}
@@ -102,29 +345,17 @@ func (refresher Refresher) Refresh(ctx context.Context, config Config) (status S
 	if err != nil {
 		return Status{}, err
 	}
+	if expectedDigest != "" && update.SHA256 != expectedDigest {
+		return Status{}, errors.New("verified provider update changed during unchanged refresh")
+	}
 	active, activeFound, err := readActiveState(paths.ActiveState)
 	if err != nil {
 		return Status{}, err
 	}
 	now := refresher.now()
-	if activeFound && active.Current.Update.SHA256 == update.SHA256 {
-		return statusForActive(active, true, now), nil
-	}
 	if !activeFound {
-		executablePath := refresher.ExecutablePath
-		if executablePath == nil {
-			executablePath = os.Executable
-		}
-		currentExecutable, err := executablePath()
-		if err != nil {
-			return Status{}, fmt.Errorf("resolve installer executable: %w", err)
-		}
-		digest, err := hashRegularFile(currentExecutable, true)
-		if err != nil {
-			return Status{}, fmt.Errorf("hash installer executable: %w", err)
-		}
-		if digest != update.SHA256 {
-			return Status{}, errors.New("installer digest does not match verified provider update")
+		if err := refresher.validateInitialInstaller(update); err != nil {
+			return Status{}, err
 		}
 	}
 	for name, path := range map[string]string{
@@ -146,6 +377,17 @@ func (refresher Refresher) Refresh(ctx context.Context, config Config) (status S
 	if err := validateSecretFile(paths.CAFile); err != nil {
 		return Status{}, fmt.Errorf("provider CA file: %w", err)
 	}
+	if err := refresher.validateProviderNetwork(ctx, config); err != nil {
+		return Status{}, err
+	}
+	if activeFound && active.Current.Update.SHA256 == update.SHA256 {
+		if verifyCurrent {
+			if err := refresher.probeStableActive(ctx, config, paths, active.Current); err != nil {
+				return Status{}, err
+			}
+		}
+		return statusForActive(active, true, now), nil
+	}
 	if err := ValidateUserPath(paths.Root, paths.PackageDir(update.SHA256), false); err != nil {
 		return Status{}, fmt.Errorf("provider package path: %w", err)
 	}
@@ -153,21 +395,24 @@ func (refresher Refresher) Refresh(ctx context.Context, config Config) (status S
 		return Status{}, err
 	}
 	imageRef := providerImageRef(update.SHA256)
-	if _, err := refresher.Runner.Run(ctx, Command{
+	if _, err := refresher.run(ctx, Command{
 		Path:  config.PodmanPath,
 		Args:  []string{"build", "--file", "-", "--tag", imageRef, paths.PackageDir(update.SHA256)},
 		Stdin: providerContainerfile,
 	}); err != nil {
 		return Status{}, fmt.Errorf("build provider candidate image: %w", err)
 	}
-	imageOutput, err := refresher.Runner.Run(ctx, Command{
+	imageOutput, err := refresher.run(ctx, Command{
 		Path: config.PodmanPath,
 		Args: []string{"image", "inspect", "--format", "{{.Id}}", imageRef},
 	})
 	if err != nil {
 		return Status{}, fmt.Errorf("inspect provider candidate image: %w", err)
 	}
-	imageID := strings.TrimSpace(string(imageOutput))
+	imageID, err := normalizePodmanImageID(string(imageOutput))
+	if err != nil {
+		return Status{}, fmt.Errorf("validate provider candidate image id: %w", err)
+	}
 	selection := ImageSelection{Update: update, ImageID: imageID, ImageRef: imageRef, ActivatedAt: now}
 	if err := selection.Validate(); err != nil {
 		return Status{}, fmt.Errorf("validate provider candidate image: %w", err)
@@ -176,16 +421,16 @@ func (refresher Refresher) Refresh(ctx context.Context, config Config) (status S
 	if err := ValidateUserPath(paths.Root, candidateState, false); err != nil {
 		return Status{}, fmt.Errorf("provider candidate state path: %w", err)
 	}
-	if err := prepareCandidateState(paths.ProviderState, candidateState); err != nil {
-		return Status{}, err
-	}
 	journal := TransactionJournal{
-		ProtocolVersion: TransactionJournalProtocolVersion,
-		ID:              "refresh-" + digestHex(update.SHA256)[:16],
-		Phase:           JournalPrepared,
-		Candidate:       selection,
-		StartedAt:       now,
-		UpdatedAt:       now,
+		ProtocolVersion:    TransactionJournalProtocolVersion,
+		ID:                 "refresh-" + digestHex(update.SHA256)[:16],
+		Phase:              JournalPrepared,
+		DeferredCommit:     deferCommit,
+		OuterTransactionID: outerTransactionID,
+		ProfileID:          profileID,
+		Candidate:          selection,
+		StartedAt:          now,
+		UpdatedAt:          now,
 	}
 	if activeFound {
 		previous := active
@@ -201,16 +446,29 @@ func (refresher Refresher) Refresh(ctx context.Context, config Config) (status S
 	if err := refresher.removeContainer(ctx, config, config.CandidateContainer); err != nil {
 		return Status{}, rollback(fmt.Errorf("remove stale provider candidate: %w", err))
 	}
-	if _, err := refresher.Runner.Run(ctx, candidateProviderCommand(config, paths, candidateState, selection)); err != nil {
+	if _, err := refresher.run(ctx, Command{Path: "/usr/bin/systemctl", Args: []string{"--user", "stop", providerServiceUnit}}); err != nil {
+		return Status{}, rollback(fmt.Errorf("quiesce active provider before state clone: %w", err))
+	}
+	if err := prepareCandidateState(paths.ProviderState, candidateState); err != nil {
+		return Status{}, rollback(err)
+	}
+	if _, err := refresher.run(ctx, candidateProviderCommand(config, paths, candidateState, selection)); err != nil {
 		return Status{}, rollback(fmt.Errorf("start provider candidate: %w", err))
 	}
 	if err := refresher.runProbe(ctx, providerProbeCommand(config, paths, config.CandidateContainer, selection)); err != nil {
 		return Status{}, rollback(fmt.Errorf("probe provider candidate: %w", err))
 	}
-	journal.Phase = JournalActivated
-	journal.UpdatedAt = refresher.now()
-	if err := AtomicWriteJSON(paths.Journal, journal); err != nil {
-		return Status{}, rollback(fmt.Errorf("write activated refresh journal: %w", err))
+	if err := writeJournalPhase(paths.Journal, &journal, JournalStatePromoting, refresher.now()); err != nil {
+		return Status{}, rollback(fmt.Errorf("write state-promoting refresh journal: %w", err))
+	}
+	if err := refresher.removeContainer(ctx, config, config.CandidateContainer); err != nil {
+		return Status{}, rollback(fmt.Errorf("stop probed provider candidate: %w", err))
+	}
+	if err := promoteCandidateProviderState(paths, update.SHA256); err != nil {
+		return Status{}, rollback(fmt.Errorf("promote provider candidate state: %w", err))
+	}
+	if err := writeJournalPhase(paths.Journal, &journal, JournalStatePromoted, refresher.now()); err != nil {
+		return Status{}, rollback(fmt.Errorf("write state-promoted refresh journal: %w", err))
 	}
 	newActive := ActiveState{ProtocolVersion: ActiveStateProtocolVersion, Current: selection, UpdatedAt: journal.UpdatedAt}
 	if activeFound {
@@ -221,19 +479,23 @@ func (refresher Refresher) Refresh(ctx context.Context, config Config) (status S
 		return Status{}, rollback(fmt.Errorf("activate provider state: %w", err))
 	}
 	activeChanged = true
+	if err := writeJournalPhase(paths.Journal, &journal, JournalActivated, refresher.now()); err != nil {
+		return Status{}, rollback(fmt.Errorf("write activated refresh journal: %w", err))
+	}
 	if err := refresher.restartProvider(ctx); err != nil {
 		return Status{}, rollback(fmt.Errorf("restart active provider: %w", err))
 	}
 	if err := refresher.runProbe(ctx, providerProbeCommand(config, paths, config.StableContainer, selection)); err != nil {
 		return Status{}, rollback(fmt.Errorf("probe active provider: %w", err))
 	}
-	journal.Phase = JournalCommitted
-	journal.UpdatedAt = refresher.now()
-	if err := AtomicWriteJSON(paths.Journal, journal); err != nil {
+	if err := writeJournalPhase(paths.Journal, &journal, JournalCommitted, refresher.now()); err != nil {
 		return Status{}, rollback(fmt.Errorf("commit refresh journal: %w", err))
 	}
-	if err := refresher.removeContainer(ctx, config, config.CandidateContainer); err != nil {
-		return Status{}, fmt.Errorf("remove provider candidate: %w", err)
+	if deferCommit {
+		return statusForActive(newActive, true, refresher.now()), nil
+	}
+	if err := cleanupProviderStateTransaction(paths, update.SHA256); err != nil {
+		return Status{}, fmt.Errorf("remove committed provider state rollback target: %w", err)
 	}
 	if err := removeDurableFile(paths.Journal); err != nil {
 		return Status{}, fmt.Errorf("remove committed refresh journal: %w", err)
@@ -270,14 +532,18 @@ func (refresher Refresher) ServeActive(ctx context.Context, config Config) error
 			return fmt.Errorf("%s path: %w", name, err)
 		}
 	}
-	output, err := refresher.Runner.Run(ctx, Command{
+	output, err := refresher.run(ctx, Command{
 		Path: config.PodmanPath,
 		Args: []string{"image", "inspect", "--format", "{{.Id}}", active.Current.ImageRef},
 	})
 	if err != nil {
 		return fmt.Errorf("inspect active provider image: %w", err)
 	}
-	if imageID := strings.TrimSpace(string(output)); imageID != active.Current.ImageID {
+	imageID, err := normalizePodmanImageID(string(output))
+	if err != nil {
+		return fmt.Errorf("validate active provider image id: %w", err)
+	}
+	if imageID != active.Current.ImageID {
 		return errors.New("active provider image id does not match durable state")
 	}
 	return refresher.Runner.Exec(Command{Path: config.PodmanPath, Args: []string{
@@ -292,7 +558,7 @@ func (refresher Refresher) ServeActive(ctx context.Context, config Config) error
 }
 
 func VerifyCurrentUpdate(ctx context.Context, config Config, runner CommandRunner) (VerifiedUpdate, error) {
-	output, err := runner.Run(ctx, Command{
+	output, err := runBoundedCommand(ctx, runner, Command{
 		Path: config.ComputeAgentPath,
 		Args: []string{
 			"supervisor-update", "verify",
@@ -392,13 +658,63 @@ func providerProbeCommand(config Config, paths LifecyclePaths, target string, se
 	return Command{Path: config.PodmanPath, Args: arguments}
 }
 
+func (refresher Refresher) validateProviderNetwork(ctx context.Context, config Config) error {
+	output, err := refresher.run(ctx, Command{Path: config.PodmanPath, Args: []string{
+		"network", "inspect", "--format", "{{.Driver}} {{.DNSEnabled}} {{.Internal}}", config.ContainerNetwork,
+	}})
+	if err != nil {
+		return fmt.Errorf("inspect provider network: %w", err)
+	}
+	fields := strings.Fields(string(output))
+	if len(fields) != 3 || fields[0] != "bridge" || fields[1] != "true" || fields[2] != "false" {
+		return errors.New("provider network must be a non-internal bridge with DNS enabled")
+	}
+	return nil
+}
+
 func (refresher Refresher) restartProvider(ctx context.Context) error {
-	_, err := refresher.Runner.Run(ctx, Command{Path: "/usr/bin/systemctl", Args: []string{"--user", "restart", providerServiceUnit}})
+	_, err := refresher.run(ctx, Command{Path: "/usr/bin/systemctl", Args: []string{"--user", "restart", providerServiceUnit}})
 	return err
 }
 
+// RestartAndProbeActive revalidates the stable service even when the package
+// digest did not change, as happens during credential rotation.
+func (refresher Refresher) RestartAndProbeActive(ctx context.Context, config Config) error {
+	if refresher.Runner == nil {
+		return errors.New("command runner is required")
+	}
+	paths := LifecyclePathsFor(config)
+	active, found, err := readActiveState(paths.ActiveState)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return errors.New("retained provider has no active image")
+	}
+	if err := refresher.restartProvider(ctx); err != nil {
+		return fmt.Errorf("restart active provider: %w", err)
+	}
+	return refresher.probeStableActive(ctx, config, paths, active.Current)
+}
+
+func (refresher Refresher) probeStableActive(ctx context.Context, config Config, paths LifecyclePaths, selection ImageSelection) error {
+	output, err := refresher.run(ctx, Command{Path: "/usr/bin/systemctl", Args: []string{
+		"--user", "show", providerServiceUnit, "--property", "ActiveState", "--value",
+	}})
+	if err != nil {
+		return fmt.Errorf("inspect active provider service: %w", err)
+	}
+	if strings.TrimSpace(string(output)) != "active" {
+		return errors.New("retained provider service is not active")
+	}
+	if err := refresher.runProbe(ctx, providerProbeCommand(config, paths, config.StableContainer, selection)); err != nil {
+		return fmt.Errorf("probe active provider: %w", err)
+	}
+	return nil
+}
+
 func (refresher Refresher) removeContainer(ctx context.Context, config Config, name string) error {
-	_, err := refresher.Runner.Run(ctx, Command{Path: config.PodmanPath, Args: []string{"rm", "--force", "--ignore", name}})
+	_, err := refresher.run(ctx, Command{Path: config.PodmanPath, Args: []string{"rm", "--force", "--ignore", name}})
 	return err
 }
 
@@ -406,7 +722,7 @@ func (refresher Refresher) runProbe(ctx context.Context, command Command) error 
 	delays := []time.Duration{250 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second}
 	var lastErr error
 	for attempt := 0; attempt <= len(delays); attempt++ {
-		if _, err := refresher.Runner.Run(ctx, command); err == nil {
+		if _, err := refresher.run(ctx, command); err == nil {
 			return nil
 		} else {
 			lastErr = err
@@ -439,7 +755,18 @@ func (refresher Refresher) rollback(ctx context.Context, config Config, paths Li
 	rollbackContext, cancelRollback := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancelRollback()
 	var rollbackErr error
-	if activeChanged {
+	rollbackErr = errors.Join(rollbackErr, refresher.removeContainer(rollbackContext, config, config.CandidateContainer))
+	providerStateRestored := true
+	if journal.Phase != JournalPrepared && journal.Phase != JournalCommitted {
+		if _, err := refresher.run(rollbackContext, Command{Path: "/usr/bin/systemctl", Args: []string{"--user", "stop", providerServiceUnit}}); err != nil {
+			providerStateRestored = false
+			rollbackErr = errors.Join(rollbackErr, err)
+		} else if err := restorePreviousProviderState(paths, journal.Candidate.Update.SHA256, journal.Phase); err != nil {
+			providerStateRestored = false
+			rollbackErr = errors.Join(rollbackErr, err)
+		}
+	}
+	if activeChanged && providerStateRestored {
 		if journal.Previous != nil {
 			if err := AtomicWriteJSON(paths.ActiveState, *journal.Previous); err != nil {
 				rollbackErr = errors.Join(rollbackErr, err)
@@ -450,11 +777,35 @@ func (refresher Refresher) rollback(ctx context.Context, config Config, paths Li
 			}
 		} else {
 			rollbackErr = errors.Join(rollbackErr, removeDurableFile(paths.ActiveState))
-			_, stopErr := refresher.Runner.Run(rollbackContext, Command{Path: "/usr/bin/systemctl", Args: []string{"--user", "stop", providerServiceUnit}})
+			_, stopErr := refresher.run(rollbackContext, Command{Path: "/usr/bin/systemctl", Args: []string{"--user", "stop", providerServiceUnit}})
 			rollbackErr = errors.Join(rollbackErr, stopErr)
 		}
 	}
-	rollbackErr = errors.Join(rollbackErr, refresher.removeContainer(rollbackContext, config, config.CandidateContainer))
+	if !activeChanged && providerStateRestored && journal.Phase != JournalPrepared && journal.Phase != JournalCommitted {
+		if journal.Previous != nil {
+			if err := refresher.restartProvider(rollbackContext); err != nil {
+				rollbackErr = errors.Join(rollbackErr, err)
+			} else if err := refresher.runProbe(rollbackContext, providerProbeCommand(config, paths, config.StableContainer, journal.Previous.Current)); err != nil {
+				rollbackErr = errors.Join(rollbackErr, err)
+			}
+		} else {
+			_, stopErr := refresher.run(rollbackContext, Command{Path: "/usr/bin/systemctl", Args: []string{"--user", "stop", providerServiceUnit}})
+			rollbackErr = errors.Join(rollbackErr, stopErr)
+		}
+	}
+	if journal.Phase == JournalPrepared {
+		rollbackErr = errors.Join(rollbackErr, cleanupProviderStateTransaction(paths, journal.Candidate.Update.SHA256))
+		if journal.Previous != nil {
+			if err := refresher.restartProvider(rollbackContext); err != nil {
+				rollbackErr = errors.Join(rollbackErr, err)
+			} else if err := refresher.runProbe(rollbackContext, providerProbeCommand(config, paths, config.StableContainer, journal.Previous.Current)); err != nil {
+				rollbackErr = errors.Join(rollbackErr, err)
+			}
+		} else {
+			_, stopErr := refresher.run(rollbackContext, Command{Path: "/usr/bin/systemctl", Args: []string{"--user", "stop", providerServiceUnit}})
+			rollbackErr = errors.Join(rollbackErr, stopErr)
+		}
+	}
 	if rollbackErr == nil {
 		rollbackErr = removeDurableFile(paths.Journal)
 	}
@@ -472,16 +823,18 @@ func (refresher Refresher) recoverInterrupted(ctx context.Context, config Config
 	if err := journal.Validate(); err != nil {
 		return fmt.Errorf("validate interrupted refresh journal: %w", err)
 	}
-	if journal.Previous == nil && journal.Phase != JournalCommitted {
-		if err := removeDurableFile(paths.ActiveState); err != nil {
-			return fmt.Errorf("remove interrupted initial active state: %w", err)
+	if err := refresher.removeContainer(ctx, config, config.CandidateContainer); err != nil {
+		return fmt.Errorf("remove interrupted provider candidate: %w", err)
+	}
+	if journal.Phase != JournalCommitted {
+		if _, err := refresher.run(ctx, Command{Path: "/usr/bin/systemctl", Args: []string{"--user", "stop", providerServiceUnit}}); err != nil {
+			return fmt.Errorf("stop interrupted provider before state recovery: %w", err)
 		}
-		if journal.Phase == JournalActivated {
-			if _, err := refresher.Runner.Run(ctx, Command{Path: "/usr/bin/systemctl", Args: []string{"--user", "stop", providerServiceUnit}}); err != nil {
-				return fmt.Errorf("stop interrupted initial provider: %w", err)
-			}
+	}
+	if journal.Phase == JournalCommitted {
+		if journal.DeferredCommit {
+			return errors.New("deferred installer refresh requires installer finalization or rollback")
 		}
-	} else {
 		recovered, err := RecoverActiveState(journal)
 		if err != nil {
 			return err
@@ -489,17 +842,41 @@ func (refresher Refresher) recoverInterrupted(ctx context.Context, config Config
 		if err := AtomicWriteJSON(paths.ActiveState, recovered); err != nil {
 			return fmt.Errorf("write recovered active state: %w", err)
 		}
-		if journal.Phase == JournalActivated {
-			if err := refresher.restartProvider(ctx); err != nil {
-				return fmt.Errorf("restart recovered provider: %w", err)
-			}
-			if err := refresher.runProbe(ctx, providerProbeCommand(config, paths, config.StableContainer, recovered.Current)); err != nil {
-				return fmt.Errorf("probe recovered provider: %w", err)
-			}
+		if err := cleanupProviderStateTransaction(paths, journal.Candidate.Update.SHA256); err != nil {
+			return fmt.Errorf("clean committed provider state transaction: %w", err)
 		}
-	}
-	if err := refresher.removeContainer(ctx, config, config.CandidateContainer); err != nil {
-		return fmt.Errorf("remove interrupted provider candidate: %w", err)
+	} else if journal.Previous == nil {
+		if journal.Phase != JournalPrepared {
+			if err := restorePreviousProviderState(paths, journal.Candidate.Update.SHA256, journal.Phase); err != nil {
+				return fmt.Errorf("restore interrupted initial provider state: %w", err)
+			}
+		} else if err := cleanupProviderStateTransaction(paths, journal.Candidate.Update.SHA256); err != nil {
+			return fmt.Errorf("clean interrupted initial candidate state: %w", err)
+		}
+		if err := removeDurableFile(paths.ActiveState); err != nil {
+			return fmt.Errorf("remove interrupted initial active state: %w", err)
+		}
+	} else {
+		if journal.Phase != JournalPrepared {
+			if err := restorePreviousProviderState(paths, journal.Candidate.Update.SHA256, journal.Phase); err != nil {
+				return fmt.Errorf("restore interrupted provider state: %w", err)
+			}
+		} else if err := cleanupProviderStateTransaction(paths, journal.Candidate.Update.SHA256); err != nil {
+			return fmt.Errorf("clean interrupted candidate state: %w", err)
+		}
+		recovered, err := RecoverActiveState(journal)
+		if err != nil {
+			return err
+		}
+		if err := AtomicWriteJSON(paths.ActiveState, recovered); err != nil {
+			return fmt.Errorf("write recovered active state: %w", err)
+		}
+		if err := refresher.restartProvider(ctx); err != nil {
+			return fmt.Errorf("restart recovered provider: %w", err)
+		}
+		if err := refresher.runProbe(ctx, providerProbeCommand(config, paths, config.StableContainer, recovered.Current)); err != nil {
+			return fmt.Errorf("probe recovered provider: %w", err)
+		}
 	}
 	if err := removeDurableFile(paths.Journal); err != nil {
 		return fmt.Errorf("remove recovered refresh journal: %w", err)
@@ -507,11 +884,176 @@ func (refresher Refresher) recoverInterrupted(ctx context.Context, config Config
 	return nil
 }
 
+func writeJournalPhase(path string, journal *TransactionJournal, phase JournalPhase, updatedAt time.Time) error {
+	next := *journal
+	next.Phase = phase
+	next.UpdatedAt = updatedAt
+	if err := AtomicWriteJSON(path, next); err != nil {
+		return err
+	}
+	*journal = next
+	return nil
+}
+
+func (refresher Refresher) finalizeDeferredRefresh(config Config) error {
+	paths := LifecyclePathsFor(config)
+	journal, found, err := readTransactionJournal(paths.Journal)
+	if err != nil || !found {
+		return err
+	}
+	if !journal.DeferredCommit || journal.Phase != JournalCommitted {
+		return errors.New("retained provider journal is not a deferred committed refresh")
+	}
+	if err := cleanupProviderStateTransaction(paths, journal.Candidate.Update.SHA256); err != nil {
+		return err
+	}
+	return removeDurableFile(paths.Journal)
+}
+
+func (refresher Refresher) finalizeInterruptedDeferredCommit(config Config) error {
+	paths := LifecyclePathsFor(config)
+	journal, found, err := readTransactionJournal(paths.Journal)
+	if err != nil || !found || !journal.DeferredCommit || journal.Phase != JournalCommitted {
+		return err
+	}
+	return refresher.finalizeDeferredRefresh(config)
+}
+
+func (refresher Refresher) rollbackDeferredRefresh(ctx context.Context, config Config) error {
+	paths := LifecyclePathsFor(config)
+	journal, found, err := readTransactionJournal(paths.Journal)
+	if err != nil || !found {
+		return err
+	}
+	if !journal.DeferredCommit || journal.Phase != JournalCommitted {
+		return errors.New("retained provider journal is not a deferred committed refresh")
+	}
+	journal.Phase = JournalActivated
+	return refresher.rollback(ctx, config, paths, journal, true)
+}
+
+func readTransactionJournal(path string) (TransactionJournal, bool, error) {
+	var journal TransactionJournal
+	if err := ReadStrictJSONFile(path, &journal); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return TransactionJournal{}, false, nil
+		}
+		return TransactionJournal{}, false, err
+	}
+	if err := journal.Validate(); err != nil {
+		return TransactionJournal{}, false, err
+	}
+	return journal, true, nil
+}
+
+func promoteCandidateProviderState(paths LifecyclePaths, digest string) error {
+	candidate := paths.CandidateState(digest)
+	previous := paths.PreviousState(digest)
+	if err := validateOwnedDirectory(paths.ProviderState); err != nil {
+		return fmt.Errorf("validate active provider state: %w", err)
+	}
+	if err := validateOwnedDirectory(candidate); err != nil {
+		return fmt.Errorf("validate candidate provider state: %w", err)
+	}
+	if _, err := os.Lstat(previous); !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			return errors.New("provider state rollback target already exists")
+		}
+		return fmt.Errorf("inspect provider state rollback target: %w", err)
+	}
+	if err := os.Rename(paths.ProviderState, previous); err != nil {
+		return fmt.Errorf("retain previous provider state: %w", err)
+	}
+	if err := os.Rename(candidate, paths.ProviderState); err != nil {
+		restoreErr := os.Rename(previous, paths.ProviderState)
+		return errors.Join(fmt.Errorf("activate candidate provider state: %w", err), restoreErr)
+	}
+	return errors.Join(syncDirectory(paths.Root), syncDirectory(filepath.Dir(candidate)))
+}
+
+func restorePreviousProviderState(paths LifecyclePaths, digest string, phase JournalPhase) error {
+	previous := paths.PreviousState(digest)
+	if _, err := os.Lstat(previous); errors.Is(err, os.ErrNotExist) {
+		if phase != JournalStatePromoting {
+			return fmt.Errorf("missing previous provider state during %s recovery", phase)
+		}
+		if err := validateOwnedDirectory(paths.ProviderState); err != nil {
+			return fmt.Errorf("validate unpromoted provider state: %w", err)
+		}
+		if err := validateOwnedDirectory(paths.CandidateState(digest)); err != nil {
+			return fmt.Errorf("validate unpromoted candidate state: %w", err)
+		}
+		return cleanupProviderStateTransaction(paths, digest)
+	} else if err != nil {
+		return fmt.Errorf("inspect previous provider state: %w", err)
+	}
+	if err := validateOwnedDirectory(previous); err != nil {
+		return fmt.Errorf("validate previous provider state: %w", err)
+	}
+	if _, err := os.Lstat(paths.ProviderState); err == nil {
+		if err := removeOwnedDirectory(paths.ProviderState); err != nil {
+			return fmt.Errorf("remove uncommitted provider state: %w", err)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect uncommitted provider state: %w", err)
+	}
+	if err := os.Rename(previous, paths.ProviderState); err != nil {
+		return fmt.Errorf("restore previous provider state: %w", err)
+	}
+	if err := syncDirectory(paths.Root); err != nil {
+		return err
+	}
+	return cleanupProviderStateTransaction(paths, digest)
+}
+
+func cleanupProviderStateTransaction(paths LifecyclePaths, digest string) error {
+	transactionRoot := filepath.Join(paths.CandidatesRoot, digestHex(digest))
+	info, err := os.Lstat(transactionRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("provider state transaction root must be a real directory")
+	}
+	if err := validateOwner(info); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(transactionRoot); err != nil {
+		return err
+	}
+	return syncDirectory(paths.CandidatesRoot)
+}
+
+func validateOwnedDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("path must be a real directory")
+	}
+	return validateOwner(info)
+}
+
+func removeOwnedDirectory(path string) error {
+	if err := validateOwnedDirectory(path); err != nil {
+		return err
+	}
+	return os.RemoveAll(path)
+}
+
 func (refresher Refresher) now() time.Time {
 	if refresher.Now == nil {
 		return time.Now().UTC()
 	}
 	return refresher.Now().UTC()
+}
+
+func (refresher Refresher) run(ctx context.Context, command Command) ([]byte, error) {
+	return runBoundedCommand(ctx, refresher.Runner, command)
 }
 
 func stageVerifiedProvider(update VerifiedUpdate, paths LifecyclePaths) error {
@@ -771,13 +1313,34 @@ func providerImageRef(digest string) string {
 	return "localhost/workflow-plugin-github-runner-provider:sha256-" + digestHex(digest)
 }
 
+func normalizePodmanImageID(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if digestPattern.MatchString(value) {
+		return value, nil
+	}
+	if len(value) == 64 {
+		candidate := "sha256:" + value
+		if digestPattern.MatchString(candidate) {
+			return candidate, nil
+		}
+	}
+	return "", errors.New("image id must be a lowercase SHA-256 digest")
+}
+
 func digestHex(digest string) string {
 	return strings.TrimPrefix(digest, "sha256:")
 }
 
 func removeDurableFile(path string) error {
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
+	if err := os.Remove(path); err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if _, parentErr := os.Lstat(filepath.Dir(path)); errors.Is(parentErr, os.ErrNotExist) {
+			return nil
+		} else if parentErr != nil {
+			return parentErr
+		}
 	}
 	return syncDirectory(filepath.Dir(path))
 }

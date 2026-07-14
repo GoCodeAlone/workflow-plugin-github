@@ -127,6 +127,200 @@ func TestInitialRefreshRequiresInstallerDigestMatch(t *testing.T) {
 	}
 }
 
+func TestRefreshBoundsEverySubprocessContext(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	writeRefreshEnvironmentFiles(t, paths)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	payload := writeTestProviderPayload(t, home, "verified-provider-bounded-refresh-commands")
+	digest := fileDigestForTest(t, payload)
+	runner := refreshTestRunner(config, payload, digest)
+	baseRun := runner.run
+	var unbounded []Command
+	runner.run = func(ctx context.Context, command Command) ([]byte, error) {
+		if _, bounded := ctx.Deadline(); !bounded {
+			unbounded = append(unbounded, command)
+		}
+		return baseRun(ctx, command)
+	}
+	refresher := Refresher{Runner: runner, ExecutablePath: func() (string, error) { return payload, nil }, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if _, err := refresher.Refresh(t.Context(), config); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if len(unbounded) != 0 {
+		t.Fatalf("refresh issued unbounded subprocesses: %s", commandTranscript(unbounded))
+	}
+}
+
+func TestRefreshFencesAgentDuringProviderMutation(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	writeRefreshEnvironmentFiles(t, paths)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	payload := writeTestProviderPayload(t, home, "verified-provider-fenced-refresh")
+	digest := fileDigestForTest(t, payload)
+	runner := refreshTestRunner(config, payload, digest)
+	baseRun := runner.run
+	statuses := []string{"unavailable", "unavailable", "idle"}
+	var events []string
+	runner.run = func(ctx context.Context, command Command) ([]byte, error) {
+		switch installCommandEvent(command, config) {
+		case "maintenance-begin":
+			journal, found, err := readLifecycleJournal(home, paths)
+			if err != nil || !found || journal.Phase != LifecycleFencing {
+				t.Fatalf("maintenance begin lifecycle journal = %+v found=%v err=%v", journal, found, err)
+			}
+			events = append(events, "maintenance-begin")
+			return maintenanceStateJSON(true, "workflow-plugin-github-retained-provider-refresh", config.ProfileID, "workflow-plugin-github-retained-provider-refresh"), nil
+		case "maintenance-status":
+			events = append(events, "maintenance-status")
+			return maintenanceStateJSON(true, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+		case "maintenance-end":
+			journal, found, err := readLifecycleJournal(home, paths)
+			if err != nil || !found || journal.Phase != LifecycleReleasing || journal.Outcome != LifecycleCommit || journal.ProviderTransaction == nil {
+				t.Fatalf("maintenance end lifecycle journal = %+v found=%v err=%v", journal, found, err)
+			}
+			inner, innerFound, err := readTransactionJournal(paths.Journal)
+			if err != nil || !innerFound || inner.Phase != JournalCommitted || inner.OuterTransactionID != journal.TransactionID || inner.ProfileID != config.ProfileID {
+				t.Fatalf("maintenance end provider journal = %+v found=%v err=%v", inner, innerFound, err)
+			}
+			events = append(events, "maintenance-end")
+			return maintenanceStateJSON(false, "workflow-plugin-github-retained-provider-refresh", config.ProfileID, "workflow-plugin-github-retained-provider-refresh"), nil
+		case "local-status":
+			if len(statuses) == 0 {
+				t.Fatal("unexpected extra local status read")
+			}
+			state := statuses[0]
+			statuses = statuses[1:]
+			events = append(events, "local-"+state)
+			return localStatusJSON(config.WorkerID, state), nil
+		case "agent-stop":
+			journal, found, err := readLifecycleJournal(home, paths)
+			if err != nil || !found || journal.Phase != LifecycleFenced {
+				t.Fatalf("agent stop lifecycle journal = %+v found=%v err=%v", journal, found, err)
+			}
+			events = append(events, "agent-stop")
+		case "agent-start":
+			events = append(events, "agent-start")
+		}
+		if isCandidateStart(command, config) {
+			events = append(events, "candidate-start")
+		}
+		return baseRun(ctx, command)
+	}
+	refresher := Refresher{Runner: runner, ExecutablePath: func() (string, error) { return payload, nil }, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if _, err := refresher.Refresh(t.Context(), config); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	assertOrderedEvents(t, events, []string{
+		"maintenance-begin", "local-unavailable", "agent-stop", "candidate-start",
+		"agent-start", "local-unavailable", "maintenance-end", "local-idle",
+	})
+	if _, found, err := readLifecycleJournal(home, paths); err != nil || found {
+		t.Fatalf("completed refresh lifecycle journal found=%v err=%v", found, err)
+	}
+	if _, found, err := readTransactionJournal(paths.Journal); err != nil || found {
+		t.Fatalf("completed refresh provider journal found=%v err=%v", found, err)
+	}
+}
+
+func TestSameDigestRefreshHealthCheckDoesNotFenceAgent(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	writeRefreshEnvironmentFiles(t, paths)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	payload := writeTestProviderPayload(t, home, "verified-provider-same-digest")
+	digest := fileDigestForTest(t, payload)
+	now := time.Unix(1_700_000_000, 0).UTC()
+	selection := selectionForDigest(payload, digest, "v1.0.31", "directive-same", testProviderImageID, now)
+	active := ActiveState{ProtocolVersion: ActiveStateProtocolVersion, Current: selection, UpdatedAt: now}
+	if err := AtomicWriteJSON(paths.ActiveState, active); err != nil {
+		t.Fatalf("write active state: %v", err)
+	}
+	runner := refreshTestRunner(config, payload, digest)
+	originalRun := runner.run
+	sawJournaledProbe := false
+	runner.run = func(ctx context.Context, command Command) ([]byte, error) {
+		if isProbeFor(command, config.StableContainer) {
+			journal, found, err := readLifecycleJournal(home, paths)
+			if err != nil || !found || journal.Operation != LifecycleRefresh || journal.Phase != LifecycleIntent || journal.ProviderEffect != ProviderUnchanged || journal.Unchanged == nil || journal.Unchanged.Active.Update.SHA256 != digest || journal.Unchanged.Candidate.SHA256 != digest || !journal.Unchanged.StableProbeAt.IsZero() {
+				t.Fatalf("same-digest probe lifecycle = %+v found=%v err=%v", journal, found, err)
+			}
+			sawJournaledProbe = true
+		}
+		return originalRun(ctx, command)
+	}
+	refresher := Refresher{Runner: runner, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if _, err := refresher.Refresh(t.Context(), config); err != nil {
+		t.Fatalf("same-digest refresh: %v", err)
+	}
+	transcript := commandTranscript(runner.commands)
+	for _, forbidden := range []string{"supervisor-maintenance", "stop " + config.AgentUnit, "start " + config.AgentUnit} {
+		if strings.Contains(transcript, forbidden) {
+			t.Fatalf("same-digest health check fenced agent with %q:\n%s", forbidden, transcript)
+		}
+	}
+	if !sawJournaledProbe {
+		t.Fatal("same-digest stable probe did not carry lifecycle provenance")
+	}
+	if _, found, err := readLifecycleJournal(home, paths); err != nil || found {
+		t.Fatalf("completed same-digest journal found=%v err=%v", found, err)
+	}
+}
+
+func TestNormalizePodmanImageIDCanonicalizesOnlyImmutableSHA256(t *testing.T) {
+	hexDigest := strings.Repeat("a", 64)
+	for _, input := range []string{hexDigest, "sha256:" + hexDigest, "\n" + hexDigest + "\n"} {
+		got, err := normalizePodmanImageID(input)
+		if err != nil || got != "sha256:"+hexDigest {
+			t.Fatalf("normalize %q = %q err=%v", input, got, err)
+		}
+	}
+	for _, input := range []string{"", strings.Repeat("a", 63), strings.Repeat("A", 64), "sha512:" + hexDigest, hexDigest + " extra"} {
+		if got, err := normalizePodmanImageID(input); err == nil {
+			t.Fatalf("normalize invalid %q = %q", input, got)
+		}
+	}
+}
+
+func TestRefreshRejectsProviderNetworkWithoutDNSBeforeBuild(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	payload := writeTestProviderPayload(t, home, "verified-provider-network")
+	digest := fileDigestForTest(t, payload)
+	paths := LifecyclePathsFor(config)
+	writeRefreshEnvironmentFiles(t, paths)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	runner := refreshTestRunner(config, payload, digest)
+	baseRun := runner.run
+	runner.run = func(ctx context.Context, command Command) ([]byte, error) {
+		if command.Path == config.PodmanPath && containsAdjacentArgs(command.Args, "network", "inspect") {
+			return []byte("bridge false false\n"), nil
+		}
+		return baseRun(ctx, command)
+	}
+	refresher := Refresher{Runner: runner, ExecutablePath: func() (string, error) { return payload, nil }}
+	if _, err := refresher.Refresh(t.Context(), config); err == nil || !strings.Contains(err.Error(), "DNS") {
+		t.Fatalf("refresh network err = %v", err)
+	}
+	for _, command := range runner.commands {
+		if command.Path == config.PodmanPath && firstArg(command.Args) == "build" {
+			t.Fatalf("refresh built image before network validation: %+v", runner.commands)
+		}
+	}
+}
+
 func TestRefreshBuildsAndPreflightsIsolatedCandidateThenStable(t *testing.T) {
 	home := t.TempDir()
 	config := validTestConfig(home)
@@ -141,6 +335,23 @@ func TestRefreshBuildsAndPreflightsIsolatedCandidateThenStable(t *testing.T) {
 		t.Fatalf("write provider state: %v", err)
 	}
 	runner := refreshTestRunner(config, payload, digest)
+	baseRun := runner.run
+	runner.run = func(ctx context.Context, command Command) ([]byte, error) {
+		if filepath.Base(command.Path) == "systemctl" && containsAdjacentArgs(command.Args, "--user", "stop") && containsArg(command.Args, providerServiceUnit) {
+			if err := os.WriteFile(filepath.Join(paths.ProviderState, "ownership.json"), []byte(`{"owner":"quiesced"}`), 0o600); err != nil {
+				t.Fatalf("write quiesced provider state: %v", err)
+			}
+		}
+		if isCandidateStart(command, config) {
+			if data, err := os.ReadFile(filepath.Join(paths.CandidateState(digest), "ownership.json")); err != nil || string(data) != `{"owner":"quiesced"}` {
+				t.Fatalf("candidate cloned live state before quiesce: data=%q err=%v", data, err)
+			}
+			if err := os.WriteFile(filepath.Join(paths.CandidateState(digest), "ownership.json"), []byte(`{"owner":"migrated"}`), 0o600); err != nil {
+				t.Fatalf("mutate candidate state: %v", err)
+			}
+		}
+		return baseRun(ctx, command)
+	}
 	now := time.Unix(1_700_000_000, 0).UTC()
 	refresher := Refresher{
 		Runner:         runner,
@@ -161,8 +372,11 @@ func TestRefreshBuildsAndPreflightsIsolatedCandidateThenStable(t *testing.T) {
 	if active.Current.Update.SHA256 != digest || active.Current.ImageID != testProviderImageID {
 		t.Fatalf("active state = %+v", active)
 	}
-	if _, err := os.Stat(filepath.Join(paths.CandidateState(digest), "ownership.json")); err != nil {
-		t.Fatalf("candidate did not receive bounded state clone: %v", err)
+	if data, err := os.ReadFile(filepath.Join(paths.ProviderState, "ownership.json")); err != nil || string(data) != `{"owner":"migrated"}` {
+		t.Fatalf("candidate state was not promoted: data=%q err=%v", data, err)
+	}
+	if _, err := os.Stat(paths.CandidateState(digest)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("promoted candidate state remains at staging path: %v", err)
 	}
 	assertRefreshCommandIsolation(t, runner.commands, config, paths)
 
@@ -171,10 +385,120 @@ func TestRefreshBuildsAndPreflightsIsolatedCandidateThenStable(t *testing.T) {
 	if err != nil || status.CurrentSHA256 != digest {
 		t.Fatalf("idempotent refresh status=%+v err=%v", status, err)
 	}
-	for _, command := range runner.commands[before:] {
-		if command.Path == config.PodmanPath || filepath.Base(command.Path) == "systemctl" {
-			t.Fatalf("digest-idempotent refresh mutated runtime: %+v", command)
+	idempotentCommands := runner.commands[before:]
+	idempotentTranscript := commandTranscript(idempotentCommands)
+	for _, required := range []string{
+		"systemctl --user show " + providerServiceUnit + " --property ActiveState --value",
+		"probe -url " + config.ProviderURL,
+	} {
+		if !strings.Contains(idempotentTranscript, required) {
+			t.Fatalf("digest-idempotent refresh skipped health check %q:\n%s", required, idempotentTranscript)
 		}
+	}
+	for _, forbidden := range []string{"podman build", "systemctl --user restart", config.CandidateContainer + " "} {
+		if strings.Contains(idempotentTranscript, forbidden) {
+			t.Fatalf("digest-idempotent refresh mutated runtime with %q:\n%s", forbidden, idempotentTranscript)
+		}
+	}
+}
+
+func TestDigestIdempotentRefreshFailsWhenStableServiceIsInactive(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	payload := writeTestProviderPayload(t, home, "verified-provider-idempotent-health")
+	digest := fileDigestForTest(t, payload)
+	paths := LifecyclePathsFor(config)
+	writeRefreshEnvironmentFiles(t, paths)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	active := ActiveState{
+		ProtocolVersion: ActiveStateProtocolVersion,
+		Current:         selectionForDigest(payload, digest, "v1.0.32", "directive-current", testProviderImageID, time.Unix(1_700_000_000, 0).UTC()),
+		UpdatedAt:       time.Unix(1_700_000_000, 0).UTC(),
+	}
+	if err := AtomicWriteJSON(paths.ActiveState, active); err != nil {
+		t.Fatalf("write active state: %v", err)
+	}
+	runner := refreshTestRunner(config, payload, digest)
+	baseRun := runner.run
+	runner.run = func(ctx context.Context, command Command) ([]byte, error) {
+		if filepath.Base(command.Path) == "systemctl" && containsAdjacentArgs(command.Args, "--property", "ActiveState") {
+			return []byte("inactive\n"), nil
+		}
+		return baseRun(ctx, command)
+	}
+	refresher := Refresher{Runner: runner}
+	if _, err := refresher.Refresh(t.Context(), config); err == nil || !strings.Contains(err.Error(), "not active") {
+		t.Fatalf("idempotent inactive refresh err = %v", err)
+	}
+	if strings.Contains(commandTranscript(runner.commands), "podman build") {
+		t.Fatalf("inactive idempotent refresh rebuilt unchanged image:\n%s", commandTranscript(runner.commands))
+	}
+}
+
+func TestDeferredRefreshRetainsRollbackStateUntilInstallerFinalizes(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	writeRefreshEnvironmentFiles(t, paths)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	previous := previousActiveStateForTest(t, home)
+	if err := AtomicWriteJSON(paths.ActiveState, previous); err != nil {
+		t.Fatalf("write previous active state: %v", err)
+	}
+	payload := writeTestProviderPayload(t, home, "verified-provider-deferred-refresh")
+	digest := fileDigestForTest(t, payload)
+	runner := refreshTestRunner(config, payload, digest)
+	refresher := Refresher{Runner: runner, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if _, err := refresher.refreshUnderLifecycleLock(t.Context(), config, false, true); err != nil {
+		t.Fatalf("deferred refresh: %v", err)
+	}
+	journal, found, err := readTransactionJournal(paths.Journal)
+	if err != nil || !found || journal.Phase != JournalCommitted || !journal.DeferredCommit {
+		t.Fatalf("deferred journal = %+v found=%v err=%v", journal, found, err)
+	}
+	if _, err := os.Stat(paths.PreviousState(digest)); err != nil {
+		t.Fatalf("deferred refresh removed rollback state: %v", err)
+	}
+	if err := refresher.finalizeDeferredRefresh(config); err != nil {
+		t.Fatalf("finalize deferred refresh: %v", err)
+	}
+	if _, err := os.Stat(paths.Journal); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("finalized journal remains: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.CandidatesRoot, digestHex(digest))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("finalized rollback state remains: %v", err)
+	}
+}
+
+func TestDeferredRefreshBindsOuterLifecycleTransaction(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	writeRefreshEnvironmentFiles(t, paths)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	previous := previousActiveStateForTest(t, home)
+	if err := AtomicWriteJSON(paths.ActiveState, previous); err != nil {
+		t.Fatalf("write previous active state: %v", err)
+	}
+	payload := writeTestProviderPayload(t, home, "verified-provider-bound-refresh")
+	digest := fileDigestForTest(t, payload)
+	runner := refreshTestRunner(config, payload, digest)
+	refresher := Refresher{Runner: runner, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if _, err := refresher.refreshUnderLifecycleTransaction(t.Context(), config, false, true, "install-transaction-123", config.ProfileID, ""); err != nil {
+		t.Fatalf("bound deferred refresh: %v", err)
+	}
+	journal, found, err := readTransactionJournal(paths.Journal)
+	if err != nil || !found {
+		t.Fatalf("read bound provider journal found=%v err=%v", found, err)
+	}
+	if journal.OuterTransactionID != "install-transaction-123" || journal.ProfileID != config.ProfileID || !journal.DeferredCommit {
+		t.Fatalf("provider transaction binding = %+v", journal)
 	}
 }
 
@@ -245,7 +569,7 @@ func TestRefreshRejectsIncompleteProviderEnvironment(t *testing.T) {
 }
 
 func TestRefreshFailurePreservesPreviousActiveImageAndCleansCandidate(t *testing.T) {
-	for _, phase := range []string{"build", "stale-candidate", "candidate", "candidate-probe", "stable-restart", "stable-probe", "canceled"} {
+	for _, phase := range []string{"build", "stale-candidate", "stable-stop", "candidate", "candidate-probe", "stable-restart", "stable-probe", "canceled"} {
 		t.Run(phase, func(t *testing.T) {
 			home := t.TempDir()
 			config := validTestConfig(home)
@@ -287,7 +611,11 @@ func TestRefreshFailurePreservesPreviousActiveImageAndCleansCandidate(t *testing
 				if phase == "candidate-probe" && isProbeFor(command, config.CandidateContainer) {
 					return nil, errors.New("candidate probe failed")
 				}
-				if phase == "stable-restart" && filepath.Base(command.Path) == "systemctl" && !failedRestart {
+				if phase == "stable-stop" && filepath.Base(command.Path) == "systemctl" && containsAdjacentArgs(command.Args, "stop", providerServiceUnit) && !failedRestart {
+					failedRestart = true
+					return nil, errors.New("stop failed")
+				}
+				if phase == "stable-restart" && filepath.Base(command.Path) == "systemctl" && containsAdjacentArgs(command.Args, "restart", providerServiceUnit) && !failedRestart {
 					failedRestart = true
 					return nil, errors.New("restart failed")
 				}
@@ -324,8 +652,105 @@ func TestRefreshFailurePreservesPreviousActiveImageAndCleansCandidate(t *testing
 	}
 }
 
+func TestStableProbeFailureRestoresPreviousProviderState(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	writeRefreshEnvironmentFiles(t, paths)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	stateFile := filepath.Join(paths.ProviderState, "state.json")
+	if err := os.WriteFile(stateFile, []byte(`{"generation":"previous"}`), 0o600); err != nil {
+		t.Fatalf("write previous provider state: %v", err)
+	}
+	previous := previousActiveStateForTest(t, home)
+	if err := AtomicWriteJSON(paths.ActiveState, previous); err != nil {
+		t.Fatalf("write previous active state: %v", err)
+	}
+	payload := writeTestProviderPayload(t, home, "verified-provider-state-rollback")
+	digest := fileDigestForTest(t, payload)
+	runner := refreshTestRunner(config, payload, digest)
+	baseRun := runner.run
+	providerStops := 0
+	runner.run = func(ctx context.Context, command Command) ([]byte, error) {
+		if filepath.Base(command.Path) == "systemctl" && containsAdjacentArgs(command.Args, "--user", "stop") && containsArg(command.Args, providerServiceUnit) {
+			providerStops++
+		}
+		if isCandidateStart(command, config) {
+			if err := os.WriteFile(filepath.Join(paths.CandidateState(digest), "state.json"), []byte(`{"generation":"candidate"}`), 0o600); err != nil {
+				t.Fatalf("mutate candidate state: %v", err)
+			}
+		}
+		if isProbeFor(command, config.StableContainer) && containsArg(command.Args, testProviderImageID) {
+			return nil, errors.New("stable probe failed")
+		}
+		return baseRun(ctx, command)
+	}
+	refresher := Refresher{Runner: runner, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if _, err := refresher.Refresh(t.Context(), config); err == nil || !strings.Contains(err.Error(), "stable probe failed") {
+		t.Fatalf("stable probe failure err = %v", err)
+	}
+	if data, err := os.ReadFile(stateFile); err != nil || string(data) != `{"generation":"previous"}` {
+		t.Fatalf("rollback state = %q err=%v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(paths.CandidatesRoot, digestHex(digest))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("state transaction remains after rollback: %v", err)
+	}
+	if providerStops != 2 {
+		t.Fatalf("provider stop count = %d want promotion and rollback stops", providerStops)
+	}
+}
+
+func TestCommitJournalWriteFailureRollsBackLastDurablePhase(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	writeRefreshEnvironmentFiles(t, paths)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	stateFile := filepath.Join(paths.ProviderState, "state.json")
+	if err := os.WriteFile(stateFile, []byte(`{"generation":"previous"}`), 0o600); err != nil {
+		t.Fatalf("write previous provider state: %v", err)
+	}
+	previous := previousActiveStateForTest(t, home)
+	if err := AtomicWriteJSON(paths.ActiveState, previous); err != nil {
+		t.Fatalf("write previous active state: %v", err)
+	}
+	payload := writeTestProviderPayload(t, home, "verified-provider-commit-journal-failure")
+	digest := fileDigestForTest(t, payload)
+	runner := refreshTestRunner(config, payload, digest)
+	baseRun := runner.run
+	blockedCommit := false
+	runner.run = func(ctx context.Context, command Command) ([]byte, error) {
+		if isCandidateStart(command, config) {
+			if err := os.WriteFile(filepath.Join(paths.CandidateState(digest), "state.json"), []byte(`{"generation":"candidate"}`), 0o600); err != nil {
+				t.Fatalf("mutate candidate state: %v", err)
+			}
+		}
+		if isProbeFor(command, config.StableContainer) && !blockedCommit {
+			blockedCommit = true
+			if err := os.Remove(paths.Journal); err != nil {
+				t.Fatalf("remove journal before commit: %v", err)
+			}
+			if err := os.Mkdir(paths.Journal, 0o700); err != nil {
+				t.Fatalf("block journal commit: %v", err)
+			}
+		}
+		return baseRun(ctx, command)
+	}
+	refresher := Refresher{Runner: runner, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if _, err := refresher.Refresh(t.Context(), config); err == nil {
+		t.Fatal("refresh with failed commit-journal write succeeded")
+	}
+	if data, err := os.ReadFile(stateFile); err != nil || string(data) != `{"generation":"previous"}` {
+		t.Fatalf("commit-write rollback state = %q err=%v", data, err)
+	}
+}
+
 func TestRefreshRecoversEveryInterruptedJournalPhaseIdempotently(t *testing.T) {
-	for _, phase := range []JournalPhase{JournalPrepared, JournalActivated, JournalCommitted} {
+	for _, phase := range []JournalPhase{JournalPrepared, JournalStatePromoting, JournalStatePromoted, JournalActivated, JournalCommitted} {
 		t.Run(string(phase), func(t *testing.T) {
 			home := t.TempDir()
 			config := validTestConfig(home)
@@ -334,10 +759,29 @@ func TestRefreshRecoversEveryInterruptedJournalPhaseIdempotently(t *testing.T) {
 			if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
 				t.Fatalf("mkdir provider state: %v", err)
 			}
+			if err := os.WriteFile(filepath.Join(paths.ProviderState, "generation"), []byte("previous"), 0o600); err != nil {
+				t.Fatalf("write previous provider state: %v", err)
+			}
 			previous := previousActiveStateForTest(t, home)
 			candidatePayload := writeTestProviderPayload(t, home, "candidate-recovery")
 			candidateDigest := fileDigestForTest(t, candidatePayload)
 			candidate := selectionForDigest(candidatePayload, candidateDigest, "v1.0.32", "directive-candidate", "sha256:"+strings.Repeat("e", 64), time.Unix(1_700_000_100, 0).UTC())
+			if err := prepareCandidateState(paths.ProviderState, paths.CandidateState(candidateDigest)); err != nil {
+				t.Fatalf("prepare candidate state: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(paths.CandidateState(candidateDigest), "generation"), []byte("candidate"), 0o600); err != nil {
+				t.Fatalf("write candidate provider state: %v", err)
+			}
+			switch phase {
+			case JournalStatePromoting:
+				if err := os.Rename(paths.ProviderState, paths.PreviousState(candidateDigest)); err != nil {
+					t.Fatalf("simulate partial provider state promotion: %v", err)
+				}
+			case JournalStatePromoted, JournalActivated, JournalCommitted:
+				if err := promoteCandidateProviderState(paths, candidateDigest); err != nil {
+					t.Fatalf("simulate provider state promotion: %v", err)
+				}
+			}
 			journal := TransactionJournal{
 				ProtocolVersion: TransactionJournalProtocolVersion,
 				ID:              "refresh-recovery",
@@ -372,10 +816,105 @@ func TestRefreshRecoversEveryInterruptedJournalPhaseIdempotently(t *testing.T) {
 			if active.Current.ImageID != wantImage {
 				t.Fatalf("%s recovered image = %s want %s", phase, active.Current.ImageID, wantImage)
 			}
+			wantGeneration := "previous"
+			if phase == JournalCommitted {
+				wantGeneration = "candidate"
+			}
+			if data, err := os.ReadFile(filepath.Join(paths.ProviderState, "generation")); err != nil || string(data) != wantGeneration {
+				t.Fatalf("%s recovered provider state = %q err=%v want %q", phase, data, err, wantGeneration)
+			}
 			if _, err := os.Stat(paths.Journal); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("%s journal remains after recovery: %v", phase, err)
 			}
 		})
+	}
+}
+
+func TestInterruptedRefreshStopsCandidateBeforeDeletingStagedState(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	previous := previousActiveStateForTest(t, home)
+	payload := writeTestProviderPayload(t, home, "candidate-recovery-order")
+	digest := fileDigestForTest(t, payload)
+	candidate := selectionForDigest(payload, digest, "v1.0.32", "directive-candidate-order", "sha256:"+strings.Repeat("e", 64), time.Unix(1_700_000_100, 0).UTC())
+	if err := prepareCandidateState(paths.ProviderState, paths.CandidateState(digest)); err != nil {
+		t.Fatalf("prepare candidate state: %v", err)
+	}
+	journal := TransactionJournal{
+		ProtocolVersion: TransactionJournalProtocolVersion,
+		ID:              "refresh-recovery-order",
+		Phase:           JournalPrepared,
+		Previous:        &previous,
+		Candidate:       candidate,
+		StartedAt:       time.Unix(1_700_000_100, 0).UTC(),
+		UpdatedAt:       time.Unix(1_700_000_101, 0).UTC(),
+	}
+	if err := AtomicWriteJSON(paths.Journal, journal); err != nil {
+		t.Fatalf("write journal: %v", err)
+	}
+	runner := &recordingCommandRunner{run: func(_ context.Context, command Command) ([]byte, error) {
+		if firstArg(command.Args) == "rm" && containsArg(command.Args, config.CandidateContainer) {
+			if _, err := os.Stat(paths.CandidateState(digest)); err != nil {
+				return nil, errors.New("candidate state deleted before container stop")
+			}
+		}
+		return nil, nil
+	}}
+	if err := (Refresher{Runner: runner}).recoverInterrupted(t.Context(), config, paths); err != nil {
+		t.Fatalf("recover interrupted candidate: %v", err)
+	}
+}
+
+func TestInterruptedRecoveryStopsStableBeforeProviderStateRestore(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.ProviderState, "generation"), []byte("previous"), 0o600); err != nil {
+		t.Fatalf("write previous provider state: %v", err)
+	}
+	previous := previousActiveStateForTest(t, home)
+	payload := writeTestProviderPayload(t, home, "candidate-recovery-stop-order")
+	digest := fileDigestForTest(t, payload)
+	candidate := selectionForDigest(payload, digest, "v1.0.32", "directive-candidate-stop-order", "sha256:"+strings.Repeat("e", 64), time.Unix(1_700_000_100, 0).UTC())
+	if err := prepareCandidateState(paths.ProviderState, paths.CandidateState(digest)); err != nil {
+		t.Fatalf("prepare candidate state: %v", err)
+	}
+	if err := promoteCandidateProviderState(paths, digest); err != nil {
+		t.Fatalf("promote candidate state: %v", err)
+	}
+	journal := TransactionJournal{
+		ProtocolVersion: TransactionJournalProtocolVersion,
+		ID:              "refresh-recovery-stop-order",
+		Phase:           JournalStatePromoted,
+		Previous:        &previous,
+		Candidate:       candidate,
+		StartedAt:       time.Unix(1_700_000_100, 0).UTC(),
+		UpdatedAt:       time.Unix(1_700_000_101, 0).UTC(),
+	}
+	if err := AtomicWriteJSON(paths.Journal, journal); err != nil {
+		t.Fatalf("write journal: %v", err)
+	}
+	if err := os.Chmod(paths.Root, 0o500); err != nil {
+		t.Fatalf("restrict provider root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(paths.Root, 0o700) })
+	runner := &recordingCommandRunner{run: func(_ context.Context, command Command) ([]byte, error) {
+		if filepath.Base(command.Path) == "systemctl" && containsAdjacentArgs(command.Args, "--user", "stop") && containsArg(command.Args, providerServiceUnit) {
+			if err := os.Chmod(paths.Root, 0o700); err != nil {
+				t.Fatalf("unlock provider root after stop: %v", err)
+			}
+		}
+		return nil, nil
+	}}
+	if err := (Refresher{Runner: runner}).recoverInterrupted(t.Context(), config, paths); err != nil {
+		t.Fatalf("recover interrupted provider state: %v", err)
 	}
 }
 
@@ -395,7 +934,7 @@ func TestServeActiveValidatesImmutableImageThenExecsRestrictedPodman(t *testing.
 	runner := &recordingCommandRunner{
 		run: func(_ context.Context, command Command) ([]byte, error) {
 			if command.Path == config.PodmanPath && len(command.Args) > 1 && command.Args[0] == "image" {
-				return []byte(active.Current.ImageID + "\n"), nil
+				return []byte(strings.TrimPrefix(active.Current.ImageID, "sha256:") + "\n"), nil
 			}
 			return nil, nil
 		},
@@ -413,7 +952,7 @@ func TestServeActiveValidatesImmutableImageThenExecsRestrictedPodman(t *testing.
 		t.Fatalf("serve active exec command = %+v", execCommand)
 	}
 	transcript := commandTranscript(runner.commands)
-	for _, required := range []string{"--network bridge", "--read-only", "--cap-drop all", "no-new-privileges", active.Current.ImageID} {
+	for _, required := range []string{"--network wfcompute-github-provider", "--read-only", "--cap-drop all", "no-new-privileges", active.Current.ImageID} {
 		if !strings.Contains(transcript, required) {
 			t.Fatalf("serve active transcript missing %q:\n%s", required, transcript)
 		}
@@ -612,6 +1151,94 @@ func TestRollbackDoesNotRestartWhenDurableRestoreFails(t *testing.T) {
 	}
 }
 
+func TestRollbackDoesNotRestartWhenProviderStateRestoreFails(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	writeRefreshEnvironmentFiles(t, paths)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	previous := previousActiveStateForTest(t, home)
+	if err := AtomicWriteJSON(paths.ActiveState, previous); err != nil {
+		t.Fatalf("write active state: %v", err)
+	}
+	payload := writeTestProviderPayload(t, home, "verified-provider-state-restore-failure")
+	digest := fileDigestForTest(t, payload)
+	runner := refreshTestRunner(config, payload, digest)
+	baseRun := runner.run
+	restarts := 0
+	runner.run = func(ctx context.Context, command Command) ([]byte, error) {
+		if filepath.Base(command.Path) == "systemctl" && containsArg(command.Args, "restart") {
+			restarts++
+		}
+		if isProbeFor(command, config.StableContainer) && containsArg(command.Args, testProviderImageID) {
+			previousState := paths.PreviousState(digest)
+			if err := os.RemoveAll(previousState); err != nil {
+				t.Fatalf("remove previous provider state: %v", err)
+			}
+			if err := os.Symlink(filepath.Join(home, "outside-provider-state"), previousState); err != nil {
+				t.Fatalf("poison previous provider state: %v", err)
+			}
+			return nil, errors.New("stable probe failed")
+		}
+		return baseRun(ctx, command)
+	}
+	refresher := Refresher{Runner: runner, Sleep: func(context.Context, time.Duration) error { return nil }}
+	if _, err := refresher.Refresh(t.Context(), config); err == nil || !strings.Contains(err.Error(), "real directory") {
+		t.Fatalf("provider state restore failure err = %v", err)
+	}
+	if restarts != 1 {
+		t.Fatalf("provider restarted %d times after provider state restore failure", restarts)
+	}
+}
+
+func TestInterruptedPromotedStateFailsClosedWhenRollbackStateIsMissing(t *testing.T) {
+	home := t.TempDir()
+	config := validTestConfig(home)
+	paths := LifecyclePathsFor(config)
+	writeRefreshEnvironmentFiles(t, paths)
+	if err := os.MkdirAll(paths.ProviderState, 0o700); err != nil {
+		t.Fatalf("mkdir provider state: %v", err)
+	}
+	stateFile := filepath.Join(paths.ProviderState, "generation")
+	if err := os.WriteFile(stateFile, []byte("candidate"), 0o600); err != nil {
+		t.Fatalf("write promoted provider state: %v", err)
+	}
+	previous := previousActiveStateForTest(t, home)
+	if err := AtomicWriteJSON(paths.ActiveState, previous); err != nil {
+		t.Fatalf("write previous active state: %v", err)
+	}
+	payload := writeTestProviderPayload(t, home, "verified-provider-missing-rollback")
+	digest := fileDigestForTest(t, payload)
+	now := time.Unix(1_700_400_000, 0).UTC()
+	candidate := selectionForDigest(payload, digest, "v1.0.32", "directive-missing-rollback", "sha256:"+strings.Repeat("d", 64), now)
+	journal := TransactionJournal{
+		ProtocolVersion: TransactionJournalProtocolVersion,
+		ID:              "refresh-missing-rollback",
+		Phase:           JournalStatePromoted,
+		Previous:        &previous,
+		Candidate:       candidate,
+		StartedAt:       now,
+		UpdatedAt:       now,
+	}
+	if err := AtomicWriteJSON(paths.Journal, journal); err != nil {
+		t.Fatalf("write interrupted journal: %v", err)
+	}
+	runner := refreshTestRunner(config, payload, digest)
+	refresher := Refresher{Runner: runner, Sleep: func(context.Context, time.Duration) error { return nil }}
+	err := refresher.recoverInterrupted(t.Context(), config, paths)
+	if err == nil || !strings.Contains(err.Error(), "missing previous provider state") {
+		t.Fatalf("missing rollback recovery err = %v", err)
+	}
+	if data, readErr := os.ReadFile(stateFile); readErr != nil || string(data) != "candidate" {
+		t.Fatalf("ambiguous provider state changed: data=%q err=%v", data, readErr)
+	}
+	if _, statErr := os.Stat(paths.Journal); statErr != nil {
+		t.Fatalf("ambiguous recovery removed journal: %v", statErr)
+	}
+}
+
 func TestCommittedCleanupFailureLeavesRecoverableJournal(t *testing.T) {
 	home := t.TempDir()
 	config := validTestConfig(home)
@@ -624,18 +1251,17 @@ func TestCommittedCleanupFailureLeavesRecoverableJournal(t *testing.T) {
 	digest := fileDigestForTest(t, payload)
 	runner := refreshTestRunner(config, payload, digest)
 	baseRun := runner.run
-	cleanupCalls := 0
 	runner.run = func(ctx context.Context, command Command) ([]byte, error) {
-		if command.Path == config.PodmanPath && firstArg(command.Args) == "rm" && containsArg(command.Args, config.CandidateContainer) {
-			cleanupCalls++
-			if cleanupCalls == 2 {
-				return nil, errors.New("candidate cleanup failed")
+		if isProbeFor(command, config.StableContainer) {
+			if err := os.Chmod(paths.CandidatesRoot, 0o500); err != nil {
+				t.Fatalf("restrict candidate cleanup root: %v", err)
 			}
 		}
 		return baseRun(ctx, command)
 	}
+	t.Cleanup(func() { _ = os.Chmod(paths.CandidatesRoot, 0o700) })
 	refresher := Refresher{Runner: runner, ExecutablePath: func() (string, error) { return payload, nil }}
-	if _, err := refresher.Refresh(t.Context(), config); err == nil || !strings.Contains(err.Error(), "candidate") {
+	if _, err := refresher.Refresh(t.Context(), config); err == nil || !strings.Contains(err.Error(), "rollback target") {
 		t.Fatalf("cleanup failure err = %v", err)
 	}
 	var journal TransactionJournal
@@ -678,15 +1304,52 @@ func TestOSCommandRunnerDoesNotInheritUnrelatedHostSecrets(t *testing.T) {
 const testProviderImageID = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 func refreshTestRunner(config Config, payload, digest string) *recordingCommandRunner {
+	for _, file := range []struct {
+		path string
+		mode os.FileMode
+		data string
+	}{
+		{path: config.ComputeAgentPath, mode: 0o700, data: "compute-agent fixture"},
+		{path: config.SupervisorConfigPath, mode: 0o600, data: "supervisor config fixture"},
+		{path: agentUnitFragmentPathForTest(config), mode: 0o600, data: "[Service]\nExecStart=" + config.ComputeAgentPath + " run\n"},
+	} {
+		if err := os.MkdirAll(filepath.Dir(file.path), 0o700); err != nil {
+			panic(err)
+		}
+		if err := os.WriteFile(file.path, []byte(file.data), file.mode); err != nil {
+			panic(err)
+		}
+	}
+	maintenanceActive := false
 	return &recordingCommandRunner{run: func(ctx context.Context, command Command) ([]byte, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
+		}
+		switch installCommandEvent(command, config) {
+		case "agent-signature":
+			return agentUnitSystemdOutput(config)
+		case "maintenance-begin":
+			maintenanceActive = true
+			return maintenanceStateJSON(true, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+		case "maintenance-end":
+			maintenanceActive = false
+			return maintenanceStateJSON(false, refreshMaintenanceID, config.ProfileID, refreshMaintenanceReason), nil
+		case "local-status":
+			state := "idle"
+			if maintenanceActive {
+				state = "unavailable"
+			}
+			return localStatusJSON(config.WorkerID, state), nil
 		}
 		switch {
 		case command.Path == config.ComputeAgentPath:
 			return testVerifiedUpdateJSON(config, payload, digest), nil
 		case command.Path == config.PodmanPath && len(command.Args) >= 2 && command.Args[0] == "image" && command.Args[1] == "inspect":
 			return []byte(testProviderImageID + "\n"), nil
+		case command.Path == config.PodmanPath && len(command.Args) >= 2 && command.Args[0] == "network" && command.Args[1] == "inspect":
+			return []byte("bridge true false\n"), nil
+		case filepath.Base(command.Path) == "systemctl" && containsAdjacentArgs(command.Args, "--property", "ActiveState"):
+			return []byte("active\n"), nil
 		default:
 			return nil, nil
 		}
@@ -698,9 +1361,11 @@ func assertRefreshCommandIsolation(t *testing.T, commands []Command, config Conf
 	transcript := commandTranscript(commands)
 	for _, required := range []string{
 		"build", "FROM scratch", config.CandidateContainer, config.StableContainer,
-		"--network bridge", "--read-only", "--cap-drop all", "no-new-privileges",
+		"network inspect --format {{.Driver}} {{.DNSEnabled}} {{.Internal}} wfcompute-github-provider",
+		"--network wfcompute-github-provider", "--read-only", "--cap-drop all", "no-new-privileges",
 		"--env-file " + paths.ProviderEnv, "--env-file " + paths.ProbeEnv,
-		"probe", "systemctl --user restart",
+		"probe -url https://" + config.CandidateContainer + ":18090", "probe -url " + config.ProviderURL,
+		"systemctl --user restart",
 	} {
 		if !strings.Contains(transcript, required) {
 			t.Fatalf("command transcript missing %q:\n%s", required, transcript)
@@ -708,6 +1373,9 @@ func assertRefreshCommandIsolation(t *testing.T, commands []Command, config Conf
 	}
 	if strings.Contains(transcript, "provider-secret") || strings.Contains(transcript, "github-secret") || strings.Contains(transcript, "/var/run/docker.sock") || strings.Contains(transcript, "/run/podman/podman.sock") {
 		t.Fatalf("command transcript leaked a secret or mounted a runtime socket:\n%s", transcript)
+	}
+	if strings.Contains(transcript, "--publish") {
+		t.Fatalf("command transcript exposed a host port:\n%s", transcript)
 	}
 	probeCommands := 0
 	for _, command := range commands {

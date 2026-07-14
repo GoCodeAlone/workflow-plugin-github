@@ -9,6 +9,42 @@ import (
 	"time"
 )
 
+func TestProviderTransactionRequiresExactOuterBinding(t *testing.T) {
+	now := time.Unix(1_700_800_000, 0).UTC()
+	journal := TransactionJournal{
+		ProtocolVersion:    TransactionJournalProtocolVersion,
+		ID:                 "refresh-transaction-123",
+		Phase:              JournalCommitted,
+		DeferredCommit:     true,
+		OuterTransactionID: "install-transaction-123",
+		ProfileID:          "github-runner-profile-stg",
+		Candidate:          validTestSelection(now),
+		StartedAt:          now,
+		UpdatedAt:          now,
+	}
+	if err := journal.Validate(); err != nil {
+		t.Fatalf("valid bound provider transaction: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*TransactionJournal)
+	}{
+		{name: "missing outer id", mutate: func(candidate *TransactionJournal) { candidate.OuterTransactionID = "" }},
+		{name: "missing profile", mutate: func(candidate *TransactionJournal) { candidate.ProfileID = "" }},
+		{name: "unsafe outer id", mutate: func(candidate *TransactionJournal) { candidate.OuterTransactionID = "../other" }},
+		{name: "binding without deferred commit", mutate: func(candidate *TransactionJournal) { candidate.DeferredCommit = false }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			candidate := journal
+			tc.mutate(&candidate)
+			if err := candidate.Validate(); err == nil || !strings.Contains(err.Error(), "outer transaction binding") {
+				t.Fatalf("Validate = %v", err)
+			}
+		})
+	}
+}
+
 func TestConfigDecodeAndValidation(t *testing.T) {
 	home := t.TempDir()
 	valid := validTestConfig(home)
@@ -51,10 +87,14 @@ func TestConfigRejectsUnsafeIdentityAndPaths(t *testing.T) {
 		{name: "unsafe component", mutate: func(c *Config) { c.ComponentID = "component;rm" }, want: "component_id"},
 		{name: "unsafe unit", mutate: func(c *Config) { c.AgentUnit = "agent.service\nEnvironment=TOKEN" }, want: "agent_unit"},
 		{name: "relative install root", mutate: func(c *Config) { c.InstallRoot = "relative" }, want: "install_root"},
+		{name: "shared workflow compute root", mutate: func(c *Config) { c.InstallRoot = filepath.Join(home, ".workflow-compute") }, want: "dedicated provider root"},
+		{name: "systemd directory as install root", mutate: func(c *Config) { c.InstallRoot = c.SystemdDir }, want: "dedicated provider root"},
+		{name: "arbitrary provider root", mutate: func(c *Config) { c.InstallRoot = filepath.Join(home, "provider") }, want: "dedicated provider root"},
 		{name: "outside home", mutate: func(c *Config) { c.SystemdDir = filepath.Join(filepath.Dir(home), "outside") }, want: "systemd_dir"},
 		{name: "plaintext provider URL", mutate: func(c *Config) { c.ProviderURL = "http://provider:18090" }, want: "provider_url"},
+		{name: "wrong provider host", mutate: func(c *Config) { c.ProviderURL = "https://host.containers.internal:18090" }, want: "provider_url"},
 		{name: "wrong provider port", mutate: func(c *Config) { c.ProviderURL = "https://" + c.StableContainer + ":18091" }, want: "provider_url"},
-		{name: "wrong network", mutate: func(c *Config) { c.ContainerNetwork = "host" }, want: "container_network"},
+		{name: "default bridge network", mutate: func(c *Config) { c.ContainerNetwork = "bridge" }, want: "container_network"},
 		{name: "short ref", mutate: func(c *Config) { c.Ref = "main" }, want: "ref"},
 		{name: "fast timer", mutate: func(c *Config) { c.RefreshIntervalSeconds = 10 }, want: "refresh_interval_seconds"},
 	} {
@@ -139,6 +179,8 @@ func TestRecoverySelectionForEveryJournalPhase(t *testing.T) {
 		want  ImageSelection
 	}{
 		{phase: JournalPrepared, want: previous.Current},
+		{phase: JournalStatePromoting, want: previous.Current},
+		{phase: JournalStatePromoted, want: previous.Current},
 		{phase: JournalActivated, want: previous.Current},
 		{phase: JournalCommitted, want: candidate},
 	} {
@@ -209,12 +251,13 @@ func validTestConfig(home string) Config {
 	return Config{
 		ProtocolVersion:        ConfigProtocolVersion,
 		WorkerID:               "github-runner-linux-stg",
-		ProfileID:              "github-runner-linux-stg",
+		ProfileID:              "github-runner-profile-stg",
 		PluginID:               GitHubPluginID,
 		ComponentID:            "github-runner-provider-sidecar",
 		ComputeAgentPath:       filepath.Join(home, ".workflow-compute", "agent-core-bin", "github-runner-linux-stg", "compute-agent"),
 		SupervisorConfigPath:   filepath.Join(home, ".workflow-compute", "github-runner-linux-stg", "supervisor.pb"),
 		LocalStatusPath:        filepath.Join(home, ".workflow-compute", "github-runner-linux-stg", "agent-status.json"),
+		ProviderMarkerPath:     filepath.Join(home, ".workflow-compute", "updates", "updates", "current", "provider-workflow-plugin-github--component-Z2l0aHViLXJ1bm5lci1wcm92aWRlci1zaWRlY2Fy.json"),
 		InstallRoot:            root,
 		SystemdDir:             filepath.Join(home, ".config", "systemd", "user"),
 		AgentUnit:              "workflow-compute-github-runner-linux-stg.service",
@@ -222,7 +265,7 @@ func validTestConfig(home string) Config {
 		ProviderURL:            "https://workflow-plugin-github-runner-provider:18090",
 		StableContainer:        "workflow-plugin-github-runner-provider",
 		CandidateContainer:     "workflow-plugin-github-runner-provider-candidate",
-		ContainerNetwork:       "bridge",
+		ContainerNetwork:       "wfcompute-github-provider",
 		Organization:           "GoCodeAlone",
 		Repository:             "GoCodeAlone/workflow-compute",
 		Workflow:               "dogfood-provider-target.yml",

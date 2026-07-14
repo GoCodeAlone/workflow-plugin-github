@@ -12,9 +12,10 @@ import (
 )
 
 const (
-	ConfigProtocolVersion = "retained-provider.config.v1"
-	GitHubPluginID        = "workflow-plugin-github"
-	maxConfigBytes        = 1 << 20
+	ConfigProtocolVersion    = "retained-provider.config.v1"
+	GitHubPluginID           = "workflow-plugin-github"
+	providerContainerNetwork = "wfcompute-github-provider"
+	maxConfigBytes           = 1 << 20
 )
 
 var (
@@ -33,6 +34,7 @@ type Config struct {
 	ComputeAgentPath       string   `json:"compute_agent_path"`
 	SupervisorConfigPath   string   `json:"supervisor_config_path"`
 	LocalStatusPath        string   `json:"local_status_path"`
+	ProviderMarkerPath     string   `json:"provider_marker_path"`
 	InstallRoot            string   `json:"install_root"`
 	SystemdDir             string   `json:"systemd_dir"`
 	AgentUnit              string   `json:"agent_unit"`
@@ -111,8 +113,8 @@ func (config Config) Validate(home string) error {
 	if config.StableContainer == config.CandidateContainer {
 		return fmt.Errorf("candidate_container must differ from stable_container")
 	}
-	if config.ContainerNetwork != "bridge" {
-		return fmt.Errorf("container_network must be bridge")
+	if config.ContainerNetwork != providerContainerNetwork {
+		return fmt.Errorf("container_network must be %s", providerContainerNetwork)
 	}
 	if !filepath.IsAbs(config.PodmanPath) || containsControl(config.PodmanPath) {
 		return fmt.Errorf("podman_path must be an absolute safe path")
@@ -121,12 +123,17 @@ func (config Config) Validate(home string) error {
 		"compute_agent_path":     config.ComputeAgentPath,
 		"supervisor_config_path": config.SupervisorConfigPath,
 		"local_status_path":      config.LocalStatusPath,
+		"provider_marker_path":   config.ProviderMarkerPath,
 		"install_root":           config.InstallRoot,
 		"systemd_dir":            config.SystemdDir,
 	} {
 		if err := ValidateUserPath(home, path, false); err != nil {
 			return fmt.Errorf("%s: %w", field, err)
 		}
+	}
+	expectedInstallRoot := filepath.Join(filepath.Clean(home), ".workflow-compute", "github-runner-provider")
+	if filepath.Clean(config.InstallRoot) != expectedInstallRoot {
+		return fmt.Errorf("install_root must be the dedicated provider root %s", expectedInstallRoot)
 	}
 	providerURL, err := url.Parse(config.ProviderURL)
 	if err != nil || providerURL.Scheme != "https" || providerURL.Host == "" || providerURL.User != nil || providerURL.RawQuery != "" || providerURL.Fragment != "" || (providerURL.Path != "" && providerURL.Path != "/") || providerURL.Port() != "18090" {

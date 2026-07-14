@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -22,6 +24,46 @@ import (
 	githubplugin "github.com/GoCodeAlone/workflow-plugin-github"
 	"github.com/GoCodeAlone/workflow-plugin-github/internal"
 )
+
+func TestProviderBinaryHasFallbackCertificateRoots(t *testing.T) {
+	const helperEnvironment = "GITHUB_PROVIDER_TEST_FALLBACK_ROOTS"
+	if os.Getenv(helperEnvironment) == "1" {
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			panic(err)
+		}
+		if len(pool.Subjects()) == 0 {
+			panic("provider binary has no fallback certificate roots")
+		}
+		return
+	}
+
+	command := exec.Command(os.Args[0], "-test.run=^TestProviderBinaryHasFallbackCertificateRoots$")
+	command.Env = append(environmentWithout(os.Environ(), helperEnvironment, "GODEBUG", "SSL_CERT_FILE", "SSL_CERT_DIR"),
+		helperEnvironment+"=1",
+		"GODEBUG=x509usefallbackroots=1",
+		"SSL_CERT_FILE=/nonexistent/provider-ca-bundle",
+		"SSL_CERT_DIR=/nonexistent/provider-ca-directory",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("provider fallback roots subprocess: %v\n%s", err, output)
+	}
+}
+
+func environmentWithout(environment []string, keys ...string) []string {
+	blocked := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		blocked[key] = struct{}{}
+	}
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, exists := blocked[key]; !exists {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
 
 type deadlineShutdowner struct {
 	closed bool

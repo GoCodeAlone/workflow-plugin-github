@@ -117,19 +117,24 @@ func (state ActiveState) Validate() error {
 type JournalPhase string
 
 const (
-	JournalPrepared  JournalPhase = "prepared"
-	JournalActivated JournalPhase = "activated"
-	JournalCommitted JournalPhase = "committed"
+	JournalPrepared       JournalPhase = "prepared"
+	JournalStatePromoting JournalPhase = "state_promoting"
+	JournalStatePromoted  JournalPhase = "state_promoted"
+	JournalActivated      JournalPhase = "activated"
+	JournalCommitted      JournalPhase = "committed"
 )
 
 type TransactionJournal struct {
-	ProtocolVersion string         `json:"protocol_version"`
-	ID              string         `json:"id"`
-	Phase           JournalPhase   `json:"phase"`
-	Previous        *ActiveState   `json:"previous,omitempty"`
-	Candidate       ImageSelection `json:"candidate"`
-	StartedAt       time.Time      `json:"started_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
+	ProtocolVersion    string         `json:"protocol_version"`
+	ID                 string         `json:"id"`
+	Phase              JournalPhase   `json:"phase"`
+	DeferredCommit     bool           `json:"deferred_commit,omitempty"`
+	OuterTransactionID string         `json:"outer_transaction_id,omitempty"`
+	ProfileID          string         `json:"profile_id,omitempty"`
+	Previous           *ActiveState   `json:"previous,omitempty"`
+	Candidate          ImageSelection `json:"candidate"`
+	StartedAt          time.Time      `json:"started_at"`
+	UpdatedAt          time.Time      `json:"updated_at"`
 }
 
 func (journal TransactionJournal) Validate() error {
@@ -139,8 +144,12 @@ func (journal TransactionJournal) Validate() error {
 	if !safeIdentifierPattern.MatchString(journal.ID) {
 		return fmt.Errorf("id contains an unsafe identifier")
 	}
+	bound := journal.OuterTransactionID != "" || journal.ProfileID != ""
+	if bound && (!journal.DeferredCommit || !safeIdentifierPattern.MatchString(journal.OuterTransactionID) || !safeIdentifierPattern.MatchString(journal.ProfileID)) {
+		return fmt.Errorf("outer transaction binding is invalid")
+	}
 	switch journal.Phase {
-	case JournalPrepared, JournalActivated, JournalCommitted:
+	case JournalPrepared, JournalStatePromoting, JournalStatePromoted, JournalActivated, JournalCommitted:
 	default:
 		return fmt.Errorf("phase is invalid")
 	}

@@ -10,9 +10,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
-const defaultCommandOutputBytes = 1 << 20
+const (
+	defaultCommandOutputBytes = 1 << 20
+	controlCommandTimeout     = 30 * time.Second
+	containerStartTimeout     = time.Minute
+	providerProbeTimeout      = 2 * time.Minute
+	providerBuildTimeout      = 10 * time.Minute
+)
 
 type Command struct {
 	Path  string
@@ -29,6 +36,27 @@ type CommandRunner interface {
 
 type OSCommandRunner struct {
 	MaxOutputBytes int
+}
+
+func runBoundedCommand(ctx context.Context, runner CommandRunner, command Command) ([]byte, error) {
+	timeout := controlCommandTimeout
+	if filepath.Base(command.Path) == "podman" && len(command.Args) > 0 {
+		switch command.Args[0] {
+		case "build":
+			timeout = providerBuildTimeout
+		case "run":
+			timeout = containerStartTimeout
+			for _, argument := range command.Args {
+				if argument == "probe" {
+					timeout = providerProbeTimeout
+					break
+				}
+			}
+		}
+	}
+	bounded, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return runner.Run(bounded, command)
 }
 
 func (runner OSCommandRunner) Run(ctx context.Context, command Command) ([]byte, error) {

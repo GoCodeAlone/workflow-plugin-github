@@ -159,8 +159,15 @@ func ValidateUserPath(home, path string, requireExisting bool) error {
 }
 
 func CloneRegularTree(source, destination string, limits CloneLimits) (returnErr error) {
+	return cloneRegularTreeWithSync(source, destination, limits, syncDirectory)
+}
+
+func cloneRegularTreeWithSync(source, destination string, limits CloneLimits, syncDir func(string) error) (returnErr error) {
 	if limits.MaxFiles <= 0 || limits.MaxBytes < 0 {
 		return fmt.Errorf("clone limits must be positive")
+	}
+	if syncDir == nil {
+		return fmt.Errorf("clone directory sync is required")
 	}
 	root, err := os.Lstat(source)
 	if err != nil {
@@ -175,8 +182,30 @@ func CloneRegularTree(source, destination string, limits CloneLimits) (returnErr
 		}
 		return fmt.Errorf("inspect clone destination: %w", err)
 	}
-	if err := os.MkdirAll(destination, 0o700); err != nil {
-		return fmt.Errorf("create clone destination: %w", err)
+	missingDirectories := make([]string, 0, 2)
+	existingAncestor := destination
+	for {
+		info, err := os.Lstat(existingAncestor)
+		if err == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("clone destination ancestor must be a regular directory")
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect clone destination ancestor: %w", err)
+		}
+		missingDirectories = append(missingDirectories, existingAncestor)
+		parent := filepath.Dir(existingAncestor)
+		if parent == existingAncestor {
+			return fmt.Errorf("clone destination has no existing ancestor")
+		}
+		existingAncestor = parent
+	}
+	for index := len(missingDirectories) - 1; index >= 0; index-- {
+		if err := os.Mkdir(missingDirectories[index], 0o700); err != nil {
+			return fmt.Errorf("create clone destination: %w", err)
+		}
 	}
 	defer func() {
 		if returnErr != nil {
@@ -185,6 +214,7 @@ func CloneRegularTree(source, destination string, limits CloneLimits) (returnErr
 	}()
 	files := 0
 	var bytesCopied int64
+	createdTreeDirectories := make([]string, 0)
 	if err := filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -205,7 +235,11 @@ func CloneRegularTree(source, destination string, limits CloneLimits) (returnErr
 			return fmt.Errorf("clone source entries must be regular files or directories: %s", relative)
 		}
 		if info.IsDir() {
-			return os.Mkdir(target, 0o700)
+			if err := os.Mkdir(target, 0o700); err != nil {
+				return err
+			}
+			createdTreeDirectories = append(createdTreeDirectories, target)
+			return nil
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("clone source entries must be regular files or directories: %s", relative)
@@ -225,7 +259,17 @@ func CloneRegularTree(source, destination string, limits CloneLimits) (returnErr
 	}); err != nil {
 		return fmt.Errorf("clone regular tree: %w", err)
 	}
-	return syncDirectory(destination)
+	for index := len(createdTreeDirectories) - 1; index >= 0; index-- {
+		if err := syncDir(createdTreeDirectories[index]); err != nil {
+			return err
+		}
+	}
+	for _, directory := range missingDirectories {
+		if err := syncDir(directory); err != nil {
+			return err
+		}
+	}
+	return syncDir(existingAncestor)
 }
 
 func cloneRegularFile(source, destination string, expected os.FileInfo) (returnErr error) {
