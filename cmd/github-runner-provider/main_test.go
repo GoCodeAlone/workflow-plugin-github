@@ -21,6 +21,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	githubplugin "github.com/GoCodeAlone/workflow-plugin-github"
@@ -99,6 +100,12 @@ type closeTrackingListener struct {
 	closed bool
 }
 
+type providerProbeRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f providerProbeRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
 func (l *closeTrackingListener) Close() error {
 	l.closed = true
 	return l.Listener.Close()
@@ -152,10 +159,14 @@ func TestProviderCommandVersionDoesNotRequireServiceCredentials(t *testing.T) {
 }
 
 func TestProviderCommandRejectsUnknownSubcommand(t *testing.T) {
+	const secretArgument = "github_pat_must-not-reach-provider-logs"
 	var stdout bytes.Buffer
-	handled, err := dispatchProviderCommand(t.Context(), slog.New(slog.NewTextHandler(io.Discard, nil)), []string{"unknown-command"}, &stdout)
+	handled, err := dispatchProviderCommand(t.Context(), slog.New(slog.NewTextHandler(io.Discard, nil)), []string{secretArgument}, &stdout)
 	if !handled || err == nil || !strings.Contains(err.Error(), "unknown command") {
 		t.Fatalf("unknown command handled=%t err=%v", handled, err)
+	}
+	if strings.Contains(err.Error(), secretArgument) {
+		t.Fatalf("unknown command leaked argument: %v", err)
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("unknown command wrote stdout: %q", stdout.String())
@@ -361,6 +372,26 @@ func TestProviderProbeRejectsRedirectWithoutForwardingBearer(t *testing.T) {
 	}
 	if redirected {
 		t.Fatal("provider probe followed redirect")
+	}
+}
+
+func TestProviderProbePreservesResponseReadFailure(t *testing.T) {
+	readErr := errors.New("response read sentinel")
+	client := &http.Client{Transport: providerProbeRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(iotest.ErrReader(readErr)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	endpoint, err := url.Parse("https://provider.test/readyz")
+	if err != nil {
+		t.Fatalf("parse probe endpoint: %v", err)
+	}
+	var response providerProbeReadyResponse
+	err = providerProbeJSON(t.Context(), client, http.MethodGet, endpoint, "provider-token", nil, &response)
+	if !errors.Is(err, readErr) || !strings.Contains(err.Error(), "read provider response") {
+		t.Fatalf("response read error = %v", err)
 	}
 }
 

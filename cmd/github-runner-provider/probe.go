@@ -267,7 +267,7 @@ func providerProbeJSON(ctx context.Context, client *http.Client, method string, 
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, providerProbeMaxBodyBytes+1))
 	if err != nil {
-		return errors.New("read provider response")
+		return fmt.Errorf("read provider response: %w", err)
 	}
 	if len(data) > providerProbeMaxBodyBytes {
 		return errors.New("provider response exceeds 1 MiB")

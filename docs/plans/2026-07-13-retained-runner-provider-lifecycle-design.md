@@ -1158,3 +1158,14 @@ Scope: no manifest change.
 Evidence: focused config/probe tests cover every retained path plus control,
 DEL, padded, and non-canonical CA values; fix-revert reproduces all eleven
 failures and restore returns both packages green.
+
+### Backport 2026-07-14: CLI Errors Preserve Causes, Not Inputs
+
+Cause: unknown-subcommand errors echoed the raw positional value into provider
+logs, while probe response-read failures discarded the underlying I/O cause.
+Change: unknown-command diagnostics are constant and response-read failures
+wrap the original error without including response bodies.
+Scope: no manifest change.
+Evidence: a token-shaped argument is absent from the command error and a
+hermetic failing response body remains reachable through `errors.Is`; reverting
+the two production lines makes both focused tests fail and restore passes.

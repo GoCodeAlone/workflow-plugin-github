@@ -75,7 +75,7 @@ func dispatchProviderCommand(ctx context.Context, logger *slog.Logger, args []st
 				return false, nil
 			}
 		}
-		return true, fmt.Errorf("unknown command %q", args[0])
+		return true, errors.New("unknown command")
 	}
 }
 
