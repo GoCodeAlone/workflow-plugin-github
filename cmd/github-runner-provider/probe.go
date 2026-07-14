@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -165,8 +164,8 @@ func validateProviderProbeFlags(rawURL, caFile, organization, repository, workfl
 		return nil, errors.New("provider url must be an HTTPS origin")
 	}
 	baseURL.Path = ""
-	if strings.TrimSpace(caFile) == "" || !filepath.IsAbs(strings.TrimSpace(caFile)) {
-		return nil, errors.New("-ca-file must be an absolute path")
+	if !retainedprovider.IsCanonicalSafeAbsolutePath(caFile) {
+		return nil, errors.New("-ca-file must be an absolute canonical safe path")
 	}
 	for _, field := range []struct {
 		name  string

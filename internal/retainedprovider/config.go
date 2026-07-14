@@ -146,7 +146,7 @@ func (config Config) Validate(home string) error {
 		{field: "systemctl_path", path: config.SystemctlPath, base: "systemctl"},
 		{field: "loginctl_path", path: config.LoginctlPath, base: "loginctl"},
 	} {
-		if !filepath.IsAbs(tool.path) || filepath.Clean(tool.path) != tool.path || containsControl(tool.path) || filepath.Base(tool.path) != tool.base {
+		if !IsCanonicalSafeAbsolutePath(tool.path) || filepath.Base(tool.path) != tool.base {
 			return fmt.Errorf("%s must be an absolute canonical safe path to %s", tool.field, tool.base)
 		}
 	}
@@ -158,6 +158,9 @@ func (config Config) Validate(home string) error {
 		"install_root":           config.InstallRoot,
 		"systemd_dir":            config.SystemdDir,
 	} {
+		if !IsCanonicalSafeAbsolutePath(path) {
+			return fmt.Errorf("%s must be an absolute canonical safe path", field)
+		}
 		if err := ValidateUserPath(home, path, false); err != nil {
 			return fmt.Errorf("%s: %w", field, err)
 		}
@@ -299,4 +302,10 @@ func decodeStrictJSON(reader io.Reader, target any) error {
 
 func containsControl(value string) bool {
 	return strings.IndexFunc(value, func(r rune) bool { return r < 0x20 || r == 0x7f }) >= 0
+}
+
+// IsCanonicalSafeAbsolutePath reports whether value is safe to pass unchanged
+// to filesystem and process boundaries.
+func IsCanonicalSafeAbsolutePath(value string) bool {
+	return filepath.IsAbs(value) && filepath.Clean(value) == value && !containsControl(value)
 }

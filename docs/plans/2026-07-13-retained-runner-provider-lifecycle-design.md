@@ -1144,3 +1144,17 @@ Scope: no manifest change.
 Evidence: `TestConfigRejectsContainerNamesThatCannotBeTLSDNSNames` and the
 release schema contract reject underscore, uppercase, trailing-dot, and derived
 overflow cases; reverting the fix makes all eight assertions fail.
+
+### Backport 2026-07-14: Absolute Paths Cross Boundaries Unchanged
+
+Cause: home-boundary validation normalized retained filesystem paths before
+checking them, while the probe accepted a trimmed CA path but later opened the
+original value. C0/DEL and non-canonical paths could therefore cross systemd,
+process, diagnostic, or filesystem boundaries despite the shipped schema's
+control-character restriction.
+Change: one shared predicate requires absolute, canonical, C0/DEL-free paths;
+all retained config paths and the probe CA argument fail closed before use.
+Scope: no manifest change.
+Evidence: focused config/probe tests cover every retained path plus control,
+DEL, padded, and non-canonical CA values; fix-revert reproduces all eleven
+failures and restore returns both packages green.

@@ -258,6 +258,10 @@ func TestProviderProbeFailsClosedOnInvalidConfiguration(t *testing.T) {
 		{name: "missing token", args: []string{"-url", "https://provider.test", "-ca-file", "/ca.pem"}, want: "GITHUB_RUNNER_PROVIDER_TOKEN"},
 		{name: "plaintext URL", args: []string{"-url", "http://provider.test", "-ca-file", "/ca.pem"}, token: "provider-token", want: "HTTPS"},
 		{name: "missing CA", args: []string{"-url", "https://provider.test"}, token: "provider-token", want: "ca-file"},
+		{name: "CA control", args: []string{"-url", "https://provider.test", "-ca-file", "/ca.pem\nnext"}, token: "provider-token", want: "ca-file"},
+		{name: "CA DEL", args: []string{"-url", "https://provider.test", "-ca-file", "/ca.pem\x7f"}, token: "provider-token", want: "ca-file"},
+		{name: "CA noncanonical", args: []string{"-url", "https://provider.test", "-ca-file", "/tmp/../ca.pem"}, token: "provider-token", want: "ca-file"},
+		{name: "CA padded", args: []string{"-url", "https://provider.test", "-ca-file", " /ca.pem"}, token: "provider-token", want: "ca-file"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("GITHUB_RUNNER_PROVIDER_TOKEN", tc.token)
