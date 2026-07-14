@@ -22,6 +22,7 @@ const (
 
 var (
 	safeIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+	dnsLabelPattern       = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 	gitRefPattern         = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	workflowPattern       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$`)
 )
@@ -125,6 +126,9 @@ func (config Config) Validate(home string) error {
 	}
 	seenContainerNames := make(map[string]struct{}, len(managedContainerNames))
 	for _, name := range managedContainerNames {
+		if !dnsLabelPattern.MatchString(name) {
+			return fmt.Errorf("managed container name %q must be a DNS label", name)
+		}
 		if _, exists := seenContainerNames[name]; exists {
 			return fmt.Errorf("managed container names must be distinct")
 		}

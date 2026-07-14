@@ -195,6 +195,39 @@ func TestConfigRejectsManagedContainerNameCollisions(t *testing.T) {
 	}
 }
 
+func TestConfigRejectsContainerNamesThatCannotBeTLSDNSNames(t *testing.T) {
+	home := t.TempDir()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Config)
+	}{
+		{
+			name: "stable underscore",
+			mutate: func(config *Config) {
+				config.StableContainer = "provider_name"
+				config.ProviderURL = "https://provider_name:18090"
+			},
+		},
+		{name: "candidate uppercase", mutate: func(config *Config) { config.CandidateContainer = "Provider-Candidate" }},
+		{
+			name: "stable trailing dot",
+			mutate: func(config *Config) {
+				config.StableContainer = "provider."
+				config.ProviderURL = "https://provider.:18090"
+			},
+		},
+		{name: "probe suffix exceeds label", mutate: func(config *Config) { config.CandidateContainer = strings.Repeat("c", 63) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := validTestConfig(home)
+			tc.mutate(&config)
+			if err := config.Validate(home); err == nil || !strings.Contains(err.Error(), "DNS label") {
+				t.Fatalf("Validate = %v", err)
+			}
+		})
+	}
+}
+
 func TestConfigRejectsAuthorityOverlapWithLifecycleState(t *testing.T) {
 	home := t.TempDir()
 	base := validTestConfig(home)

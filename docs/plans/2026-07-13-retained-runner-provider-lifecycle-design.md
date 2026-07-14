@@ -1130,3 +1130,17 @@ Scope: no manifest change.
 Evidence: `govulncheck ./cmd/github-runner-provider` drops the two standard
 library, `x/net`, and Kinesis findings and reports only the five no-fix Docker
 advisories after the pins.
+
+### Backport 2026-07-14: Managed Container Names Are TLS DNS Labels
+
+Cause: generic safe identifiers allowed underscores, uppercase, trailing dots,
+and 63-byte base names even though stable/candidate names become HTTPS hosts,
+certificate DNS SANs, Podman network aliases, and derived `-probe` names.
+Change: runtime validation requires every base and derived managed container
+name to be a lowercase single DNS label. The shipped schema applies the same
+rule, caps base names at 57 bytes so `-probe` remains within 63, and constrains
+the `provider_url` host identically.
+Scope: no manifest change.
+Evidence: `TestConfigRejectsContainerNamesThatCannotBeTLSDNSNames` and the
+release schema contract reject underscore, uppercase, trailing-dot, and derived
+overflow cases; reverting the fix makes all eight assertions fail.

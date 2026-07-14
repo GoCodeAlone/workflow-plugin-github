@@ -171,6 +171,30 @@ func TestReleaseArchiveIncludesRetainedProviderConfigContract(t *testing.T) {
 	if err := validateFields(fields); err == nil {
 		t.Fatal("retained-provider config schema accepted a control character in an absolute path")
 	}
+	for _, tc := range []struct {
+		name      string
+		field     string
+		value     string
+		stableURL string
+	}{
+		{name: "stable underscore", field: "stable_container", value: "provider_name", stableURL: "https://provider_name:18090"},
+		{name: "candidate uppercase", field: "candidate_container", value: "Provider-Candidate"},
+		{name: "stable trailing dot", field: "stable_container", value: "provider.", stableURL: "https://provider.:18090"},
+		{name: "probe suffix exceeds label", field: "candidate_container", value: strings.Repeat("c", 63)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := json.Unmarshal(example, &fields); err != nil {
+				t.Fatalf("reset retained-provider config fields: %v", err)
+			}
+			fields[tc.field], _ = json.Marshal(tc.value)
+			if tc.stableURL != "" {
+				fields["provider_url"], _ = json.Marshal(tc.stableURL)
+			}
+			if err := validateFields(fields); err == nil {
+				t.Fatalf("retained-provider config schema accepted non-DNS %s %q", tc.field, tc.value)
+			}
+		})
+	}
 	for _, field := range []string{"protocol_version", "worker_id", "provider_marker_path", "podman_path", "systemctl_path", "loginctl_path", "ref", "refresh_interval_seconds"} {
 		if !bytes.Contains(schema, []byte(`"`+field+`"`)) {
 			t.Fatalf("retained-provider config schema is missing %q", field)
