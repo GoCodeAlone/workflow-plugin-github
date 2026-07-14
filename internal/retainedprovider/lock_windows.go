@@ -4,10 +4,36 @@ package retainedprovider
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 
 	"golang.org/x/sys/windows"
 )
+
+func openNoFollowFile(path string, _ fs.FileMode) (*os.File, error) {
+	windowsPath, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	handle, err := windows.CreateFile(
+		windowsPath,
+		windows.GENERIC_READ|windows.GENERIC_WRITE,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		nil,
+		windows.OPEN_ALWAYS,
+		windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT,
+		0,
+	)
+	if err != nil {
+		return nil, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	file := os.NewFile(uintptr(handle), path)
+	if file == nil {
+		_ = windows.CloseHandle(handle)
+		return nil, errors.New("convert no-follow file handle")
+	}
+	return file, nil
+}
 
 func lockFile(file *os.File) error {
 	var overlapped windows.Overlapped

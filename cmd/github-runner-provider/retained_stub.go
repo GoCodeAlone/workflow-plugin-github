@@ -56,7 +56,7 @@ func runRetainedProviderCommandWithDependencies(ctx context.Context, _ *slog.Log
 	switch args[0] {
 	case "install", "refresh", "serve-active", "status", "uninstall", "recover":
 	default:
-		return fmt.Errorf("unknown retained provider subcommand %q", args[0])
+		return errors.New("unknown retained provider subcommand")
 	}
 	flags := flag.NewFlagSet("github-runner-provider retained "+args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)

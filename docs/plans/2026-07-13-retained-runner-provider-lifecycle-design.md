@@ -1169,3 +1169,19 @@ Scope: no manifest change.
 Evidence: a token-shaped argument is absent from the command error and a
 hermetic failing response body remains reachable through `errors.Is`; reverting
 the two production lines makes both focused tests fail and restore passes.
+
+### Backport 2026-07-14: Security-Sensitive Creation Never Follows Symlinks
+
+Cause: install-lock and lifecycle-audit creation validated a missing final path
+with `Lstat` and then used a following `OpenFile(O_CREATE)`, allowing a symlink
+to be raced into that gap; retained unknown-subcommand diagnostics also echoed
+their raw input like the already-corrected top-level dispatcher.
+Change: both creation paths use one injected no-follow opener: `O_NOFOLLOW` and
+`O_CLOEXEC` on Unix, `FILE_FLAG_OPEN_REPARSE_POINT` on Windows, and fail-closed
+behavior elsewhere. Existing owner, mode, regular-file, and same-inode checks
+remain after open. Retained unknown-subcommand diagnostics are constant.
+Scope: no manifest change.
+Evidence: deterministic Unix tests place a symlink after pre-open validation
+for both files and prove the target stays untouched; the retained token-shaped
+argument is absent from errors. Reverting production removes the no-follow
+boundary and reproduces the leak; restore passes and Windows cross-compiles.

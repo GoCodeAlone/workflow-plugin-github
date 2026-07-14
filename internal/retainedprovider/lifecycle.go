@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -884,10 +885,17 @@ func drainLifecycleAudit(home string, paths LifecyclePaths, journal *LifecycleJo
 }
 
 func openLifecycleAudit(path string) (*os.File, error) {
+	return openLifecycleAuditWith(path, openNoFollowFile)
+}
+
+func openLifecycleAuditWith(path string, opener func(string, fs.FileMode) (*os.File, error)) (*os.File, error) {
+	if opener == nil {
+		return nil, errors.New("lifecycle audit opener is required")
+	}
 	if err := rejectNonRegularDestination(path); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := opener(path, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open lifecycle audit: %w", err)
 	}

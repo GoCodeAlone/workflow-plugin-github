@@ -411,6 +411,13 @@ func AcquireInstallLock(path string) (*InstallLock, error) {
 }
 
 func openRegularLockFile(path string) (*os.File, error) {
+	return openRegularLockFileWith(path, openNoFollowFile)
+}
+
+func openRegularLockFileWith(path string, opener func(string, fs.FileMode) (*os.File, error)) (*os.File, error) {
+	if opener == nil {
+		return nil, errors.New("install lock opener is required")
+	}
 	before, err := os.Lstat(path)
 	if err == nil {
 		if !before.Mode().IsRegular() {
@@ -422,7 +429,7 @@ func openRegularLockFile(path string) (*os.File, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	file, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	file, err := opener(path, 0o600)
 	if err != nil {
 		return nil, err
 	}

@@ -251,14 +251,15 @@ func TestRetainedCommandFailsClosedOnUnsupportedPlatformAndInvalidShape(t *testi
 		ServeActive: func(context.Context, retainedprovider.Config) error { return nil },
 	}
 	for _, tc := range []struct {
-		name string
-		deps retainedProviderCommandDependencies
-		args []string
-		want string
+		name      string
+		deps      retainedProviderCommandDependencies
+		args      []string
+		want      string
+		redactArg bool
 	}{
 		{name: "unsupported", deps: func() retainedProviderCommandDependencies { value := base; value.GOOS = "darwin"; return value }(), args: []string{"refresh"}, want: "unsupported"},
 		{name: "missing subcommand", deps: base, want: "subcommand"},
-		{name: "unknown", deps: base, args: []string{"install-now"}, want: "unknown"},
+		{name: "unknown", deps: base, args: []string{"github_pat_must-not-reach-retained-logs"}, want: "unknown", redactArg: true},
 		{name: "missing config", deps: base, args: []string{"refresh"}, want: "-config"},
 		{name: "positional", deps: base, args: []string{"refresh", "-config", "/tmp/config", "extra"}, want: "positional"},
 	} {
@@ -266,6 +267,9 @@ func TestRetainedCommandFailsClosedOnUnsupportedPlatformAndInvalidShape(t *testi
 			err := runRetainedProviderCommandWithDependencies(t.Context(), slog.New(slog.NewTextHandler(io.Discard, nil)), tc.args, io.Discard, tc.deps)
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("err = %v want %q", err, tc.want)
+			}
+			if tc.redactArg && strings.Contains(err.Error(), tc.args[0]) {
+				t.Fatalf("retained command error leaked argument: %v", err)
 			}
 		})
 	}
