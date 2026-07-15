@@ -1185,3 +1185,15 @@ Evidence: deterministic Unix tests place a symlink after pre-open validation
 for both files and prove the target stays untouched; the retained token-shaped
 argument is absent from errors. Reverting production removes the no-follow
 boundary and reproduces the leak; restore passes and Windows cross-compiles.
+
+### Backport 2026-07-14: Schema Paths Use Canonical Segments
+
+Cause: the runtime canonical-path predicate rejected duplicate separators,
+dot/parent segments, and trailing separators, while the shipped schema's broad
+absolute-path pattern accepted them.
+Change: replace the broad pattern with an explicit segment grammar. Root and
+canonical dot-prefixed names remain valid; empty, `.`, and `..` segments do not.
+Scope: no manifest change.
+Evidence: the real release-schema test rejects `//`, `/./`, `/../`, and a
+trailing separator while continuing to validate the shipped example; reverting
+the grammar accepts the first invalid path and restoring it passes.

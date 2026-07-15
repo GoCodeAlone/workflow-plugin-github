@@ -171,6 +171,20 @@ func TestReleaseArchiveIncludesRetainedProviderConfigContract(t *testing.T) {
 	if err := validateFields(fields); err == nil {
 		t.Fatal("retained-provider config schema accepted a control character in an absolute path")
 	}
+	for _, value := range []string{
+		"/home/wfcompute//compute-agent",
+		"/home/wfcompute/./compute-agent",
+		"/home/wfcompute/bin/../compute-agent",
+		"/home/wfcompute/compute-agent/",
+	} {
+		if err := json.Unmarshal(example, &fields); err != nil {
+			t.Fatalf("reset retained-provider config fields: %v", err)
+		}
+		fields["compute_agent_path"], _ = json.Marshal(value)
+		if err := validateFields(fields); err == nil {
+			t.Fatalf("retained-provider config schema accepted non-canonical absolute path %q", value)
+		}
+	}
 	for _, tc := range []struct {
 		name      string
 		field     string
