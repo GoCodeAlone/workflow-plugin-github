@@ -1,9 +1,16 @@
 package githubplugin_test
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/GoCodeAlone/workflow-plugin-github/internal/retainedprovider"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 )
 
 func TestReleaseArchiveIncludesGitHubRunnerProvider(t *testing.T) {
@@ -26,6 +33,197 @@ func TestReleaseArchiveIncludesGitHubRunnerProvider(t *testing.T) {
 
 	if _, err := os.Stat("cmd/github-runner-provider/main.go"); err != nil {
 		t.Fatalf("github-runner-provider command must exist: %v", err)
+	}
+}
+
+func TestReleaseArchiveIncludesRetainedProviderOperations(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	archive := listItemWithID(topLevelSection(string(data), "archives:"), "workflow-plugin-github")
+	if !strings.Contains(archive, "- README.md") {
+		t.Fatal("release archive must include retained-provider operator documentation")
+	}
+
+	readmeData, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	readme := string(readmeData)
+	for _, want := range []string{
+		"loginctl enable-linger",
+		"podman info --format '{{.Host.Security.Rootless}}'",
+		"examples/github-runner-retained-config.json",
+		"schemas/github-runner-retained-config.schema.json",
+		"github-runner-provider retained install -config",
+		"GITHUB_RUNNER_PROVIDER_GITHUB_TOKEN",
+		"GITHUB_RUNNER_PROVIDER_TOKEN",
+		"github-runner-provider retained status -config",
+		"github-runner-provider retained uninstall -config",
+		"github-runner-provider retained uninstall -config <absolute-config-path> --purge",
+		"credential rotation",
+		"github-runner-provider retained recover -config",
+		"autonomous refresh",
+		"GitHub workflow output is orchestration evidence only",
+		"STG task, proof, log, and artifact APIs",
+	} {
+		if !strings.Contains(readme, want) {
+			t.Fatalf("retained-provider operations documentation is missing %q", want)
+		}
+	}
+}
+
+func TestReleaseArchiveIncludesRetainedProviderConfigContract(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	archive := listItemWithID(topLevelSection(string(data), "archives:"), "workflow-plugin-github")
+	for _, path := range []string{
+		"schemas/github-runner-retained-config.schema.json",
+		"examples/github-runner-retained-config.json",
+	} {
+		if !strings.Contains(archive, "- "+path) {
+			t.Fatalf("release archive must include retained-provider config contract %q", path)
+		}
+	}
+
+	example, err := os.ReadFile("examples/github-runner-retained-config.json")
+	if err != nil {
+		t.Fatalf("read retained-provider config example: %v", err)
+	}
+	home := t.TempDir()
+	runtimeExample := bytes.ReplaceAll(example, []byte("/home/wfcompute"), []byte(filepath.ToSlash(home)))
+	config, err := retainedprovider.DecodeConfig(bytes.NewReader(runtimeExample), home)
+	if err != nil {
+		t.Fatalf("retained-provider config example must pass the shipped runtime decoder: %v", err)
+	}
+	if config.ProtocolVersion != retainedprovider.ConfigProtocolVersion || config.PluginID != retainedprovider.GitHubPluginID {
+		t.Fatalf("retained-provider config example has wrong identity: %+v", config)
+	}
+	schema, err := os.ReadFile("schemas/github-runner-retained-config.schema.json")
+	if err != nil {
+		t.Fatalf("read retained-provider config schema: %v", err)
+	}
+	if !json.Valid(schema) {
+		t.Fatal("retained-provider config schema must be valid JSON")
+	}
+	compiled, err := jsonschema.NewCompiler().Compile("schemas/github-runner-retained-config.schema.json")
+	if err != nil {
+		t.Fatalf("compile retained-provider config schema: %v", err)
+	}
+	var exampleDocument any
+	if err := json.Unmarshal(example, &exampleDocument); err != nil {
+		t.Fatalf("decode retained-provider config example for schema validation: %v", err)
+	}
+	if err := compiled.Validate(exampleDocument); err != nil {
+		t.Fatalf("retained-provider config example must pass the shipped schema: %v", err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(example, &fields); err != nil {
+		t.Fatalf("decode retained-provider config fields: %v", err)
+	}
+	validateFields := func(fields map[string]json.RawMessage) error {
+		data, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatalf("marshal retained-provider schema fixture: %v", err)
+		}
+		var document any
+		if err := json.Unmarshal(data, &document); err != nil {
+			t.Fatalf("decode retained-provider schema fixture: %v", err)
+		}
+		return compiled.Validate(document)
+	}
+	delete(fields, "worker_id")
+	if err := validateFields(fields); err == nil {
+		t.Fatal("retained-provider config schema accepted an example without worker_id")
+	}
+	if err := json.Unmarshal(example, &fields); err != nil {
+		t.Fatalf("reset retained-provider config fields: %v", err)
+	}
+	delete(fields, "systemctl_path")
+	if err := validateFields(fields); err == nil {
+		t.Fatal("retained-provider config schema accepted an example without systemctl_path")
+	}
+	if err := json.Unmarshal(example, &fields); err != nil {
+		t.Fatalf("reset retained-provider config fields: %v", err)
+	}
+	labels := make([]string, 64)
+	for index := range labels {
+		labels[index] = fmt.Sprintf("label-%d", index)
+	}
+	fields["labels"], _ = json.Marshal(labels)
+	if err := validateFields(fields); err != nil {
+		t.Fatalf("retained-provider config schema rejected 64 labels: %v", err)
+	}
+	labels = append(labels, "label-64")
+	fields["labels"], _ = json.Marshal(labels)
+	if err := validateFields(fields); err == nil {
+		t.Fatal("retained-provider config schema accepted 65 labels")
+	}
+	fields["labels"] = json.RawMessage(`["self-hosted"]`)
+	fields["podman_path"], _ = json.Marshal("/podman")
+	if err := validateFields(fields); err != nil {
+		t.Fatalf("retained-provider config schema rejected runtime-valid root Podman path: %v", err)
+	}
+	fields["podman_path"], _ = json.Marshal("/usr/bin/podman\t")
+	if err := validateFields(fields); err == nil {
+		t.Fatal("retained-provider config schema accepted a control character in an absolute path")
+	}
+	for _, value := range []string{
+		"/home/wfcompute//compute-agent",
+		"/home/wfcompute/./compute-agent",
+		"/home/wfcompute/bin/../compute-agent",
+		"/home/wfcompute/compute-agent/",
+	} {
+		if err := json.Unmarshal(example, &fields); err != nil {
+			t.Fatalf("reset retained-provider config fields: %v", err)
+		}
+		fields["compute_agent_path"], _ = json.Marshal(value)
+		if err := validateFields(fields); err == nil {
+			t.Fatalf("retained-provider config schema accepted non-canonical absolute path %q", value)
+		}
+	}
+	for _, tc := range []struct {
+		name      string
+		field     string
+		value     string
+		stableURL string
+	}{
+		{name: "stable underscore", field: "stable_container", value: "provider_name", stableURL: "https://provider_name:18090"},
+		{name: "candidate uppercase", field: "candidate_container", value: "Provider-Candidate"},
+		{name: "stable trailing dot", field: "stable_container", value: "provider.", stableURL: "https://provider.:18090"},
+		{name: "probe suffix exceeds label", field: "candidate_container", value: strings.Repeat("c", 63)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := json.Unmarshal(example, &fields); err != nil {
+				t.Fatalf("reset retained-provider config fields: %v", err)
+			}
+			fields[tc.field], _ = json.Marshal(tc.value)
+			if tc.stableURL != "" {
+				fields["provider_url"], _ = json.Marshal(tc.stableURL)
+			}
+			if err := validateFields(fields); err == nil {
+				t.Fatalf("retained-provider config schema accepted non-DNS %s %q", tc.field, tc.value)
+			}
+		})
+	}
+	for _, field := range []string{"protocol_version", "worker_id", "provider_marker_path", "podman_path", "systemctl_path", "loginctl_path", "ref", "refresh_interval_seconds"} {
+		if !bytes.Contains(schema, []byte(`"`+field+`"`)) {
+			t.Fatalf("retained-provider config schema is missing %q", field)
+		}
+	}
+}
+
+func TestGitHubRunnerProviderReleaseBuildInjectsVersion(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatalf("read .goreleaser.yaml: %v", err)
+	}
+	build := listItemWithID(topLevelSection(string(data), "builds:"), "github-runner-provider")
+	if !strings.Contains(build, "-X github.com/GoCodeAlone/workflow-plugin-github/internal.Version={{.Version}}") {
+		t.Fatalf("github-runner-provider release build must inject internal.Version:\n%s", build)
 	}
 }
 

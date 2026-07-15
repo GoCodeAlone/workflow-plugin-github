@@ -42,6 +42,8 @@ builds:
     goarch:
       - amd64
       - arm64
+    ldflags:
+      - -s -w -X github.com/GoCodeAlone/workflow-plugin-github/internal.Version={{.Version}}
   - id: github-actions-runner-job
     main: ./cmd/github-actions-runner-job
     binary: github-actions-runner-job
@@ -72,6 +74,9 @@ archives:
       - schemas/github-runner-provider.schema.json
       - schemas/github-runner-ephemeral-job-input.schema.json
       - schemas/github-runner-ephemeral-job-output.schema.json
+      - schemas/github-runner-retained-config.schema.json
+      - examples/github-runner-retained-config.json
+      - README.md
       - LICENSE
 
 checksum:

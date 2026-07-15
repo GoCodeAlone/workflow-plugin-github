@@ -1,22 +1,72 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	githubplugin "github.com/GoCodeAlone/workflow-plugin-github"
+	"github.com/GoCodeAlone/workflow-plugin-github/internal"
 )
+
+func TestProviderBinaryHasFallbackCertificateRoots(t *testing.T) {
+	const helperEnvironment = "GITHUB_PROVIDER_TEST_FALLBACK_ROOTS"
+	if os.Getenv(helperEnvironment) == "1" {
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			panic(err)
+		}
+		if pool.Equal(x509.NewCertPool()) {
+			panic("provider binary has no fallback certificate roots")
+		}
+		return
+	}
+
+	command := exec.Command(os.Args[0], "-test.run=^TestProviderBinaryHasFallbackCertificateRoots$")
+	command.Env = append(environmentWithout(os.Environ(), helperEnvironment, "GODEBUG", "SSL_CERT_FILE", "SSL_CERT_DIR"),
+		helperEnvironment+"=1",
+		"GODEBUG=x509usefallbackroots=1",
+		"SSL_CERT_FILE=/nonexistent/provider-ca-bundle",
+		"SSL_CERT_DIR=/nonexistent/provider-ca-directory",
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("provider fallback roots subprocess: %v\n%s", err, output)
+	}
+}
+
+func environmentWithout(environment []string, keys ...string) []string {
+	blocked := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		blocked[key] = struct{}{}
+	}
+	filtered := make([]string, 0, len(environment))
+	for _, entry := range environment {
+		key, _, _ := strings.Cut(entry, "=")
+		if _, exists := blocked[key]; !exists {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
 
 type deadlineShutdowner struct {
 	closed bool
@@ -48,6 +98,12 @@ type recordingProviderHTTPServer struct {
 type closeTrackingListener struct {
 	net.Listener
 	closed bool
+}
+
+type providerProbeRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f providerProbeRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }
 
 func (l *closeTrackingListener) Close() error {
@@ -82,6 +138,284 @@ func TestProviderHTTPServerHasBoundedConnectionTimeouts(t *testing.T) {
 	}
 	if server.TLSConfig == nil || server.TLSConfig.MinVersion < tls.VersionTLS12 {
 		t.Fatalf("provider TLS minimum is not pinned to TLS 1.2+: %+v", server.TLSConfig)
+	}
+}
+
+func TestProviderCommandVersionDoesNotRequireServiceCredentials(t *testing.T) {
+	t.Setenv("GITHUB_RUNNER_PROVIDER_GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_RUNNER_PROVIDER_TOKEN", "")
+	var stdout bytes.Buffer
+	handled, err := dispatchProviderCommand(t.Context(), slog.New(slog.NewTextHandler(io.Discard, nil)), []string{"version"}, &stdout)
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if !handled {
+		t.Fatal("version was treated as a legacy listen address")
+	}
+	if got, want := strings.TrimSpace(stdout.String()), internal.Version; got != want || got == "" {
+		t.Fatalf("version output = %q want %q", got, want)
+	}
+}
+
+func TestProviderCommandRejectsUnknownSubcommand(t *testing.T) {
+	const secretArgument = "github_pat_must-not-reach-provider-logs"
+	var stdout bytes.Buffer
+	handled, err := dispatchProviderCommand(t.Context(), slog.New(slog.NewTextHandler(io.Discard, nil)), []string{secretArgument}, &stdout)
+	if !handled || err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("unknown command handled=%t err=%v", handled, err)
+	}
+	if strings.Contains(err.Error(), secretArgument) {
+		t.Fatalf("unknown command leaked argument: %v", err)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("unknown command wrote stdout: %q", stdout.String())
+	}
+}
+
+func TestProviderCommandPreservesLegacyListenAddress(t *testing.T) {
+	var stdout bytes.Buffer
+	handled, err := dispatchProviderCommand(t.Context(), slog.New(slog.NewTextHandler(io.Discard, nil)), []string{"127.0.0.1:0"}, &stdout)
+	if handled || err != nil {
+		t.Fatalf("legacy address handled=%t err=%v", handled, err)
+	}
+}
+
+func TestProviderProbeAuthenticatesAndEmitsRedactedSemanticEvidence(t *testing.T) {
+	const providerToken = "provider-secret-token"
+	const githubToken = "github-secret-token"
+	var readyAuth string
+	var preflightAuth string
+	var request providerProbePreflightRequest
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/readyz":
+			readyAuth = r.Header.Get("Authorization")
+			_ = json.NewEncoder(w).Encode(providerProbeReadyResponse{Status: "ok"})
+		case "/v1/actions/orgs/GoCodeAlone/runners/preflight":
+			preflightAuth = r.Header.Get("Authorization")
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatalf("decode preflight request: %v", err)
+			}
+			_ = json.NewEncoder(w).Encode(internal.GitHubRunnerProviderPreflight{
+				Organization:         "GoCodeAlone",
+				RunnerGroup:          "ephemeral",
+				RunnerGroupID:        41,
+				Ref:                  strings.Repeat("a", 40),
+				ResolvedWorkflowPath: ".github/workflows/dogfood-provider-target.yml",
+				ResolvedRefSHA:       strings.Repeat("a", 40),
+				LabelsObserved:       5,
+				RunnerCountChecked:   3,
+				ActionsEnabled:       true,
+				SelfHostedAllowed:    true,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	if err := os.WriteFile(caFile, caPEM, 0o600); err != nil {
+		t.Fatalf("write CA: %v", err)
+	}
+	t.Setenv("GITHUB_RUNNER_PROVIDER_TOKEN", providerToken)
+	t.Setenv("GITHUB_RUNNER_PROVIDER_GITHUB_TOKEN", githubToken)
+	var stdout bytes.Buffer
+	err := runProviderProbe(t.Context(), []string{
+		"-url", server.URL,
+		"-ca-file", caFile,
+		"-organization", "GoCodeAlone",
+		"-repository", "GoCodeAlone/workflow-compute",
+		"-workflow", "dogfood-provider-target.yml",
+		"-ref", strings.Repeat("a", 40),
+		"-runner-name", "wfc-stg-ghp-linux-probe",
+		"-runner-group", "ephemeral",
+		"-label", "self-hosted",
+		"-label", "linux",
+		"-label", "wfc-ghp-stg",
+	}, &stdout)
+	if err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if readyAuth != "Bearer "+providerToken || preflightAuth != "Bearer "+providerToken {
+		t.Fatalf("probe auth ready=%q preflight=%q", readyAuth, preflightAuth)
+	}
+	if request.Repository != "GoCodeAlone/workflow-compute" || request.RunnerName != "wfc-stg-ghp-linux-probe" || len(request.Labels) != 3 {
+		t.Fatalf("preflight request = %+v", request)
+	}
+	var result providerProbeResult
+	decoder := json.NewDecoder(bytes.NewReader(stdout.Bytes()))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&result); err != nil {
+		t.Fatalf("decode probe output: %v output=%s", err, stdout.String())
+	}
+	if result.Status != "passed" || !result.Ready || result.Organization != "GoCodeAlone" || result.RunnerGroupID != 41 || result.ResolvedRefSHA != strings.Repeat("a", 40) || result.ObservedAt.IsZero() {
+		t.Fatalf("probe result = %+v", result)
+	}
+	if strings.Contains(stdout.String(), providerToken) || strings.Contains(stdout.String(), githubToken) {
+		t.Fatalf("probe output leaked credential: %s", stdout.String())
+	}
+}
+
+func TestProviderProbeFailsClosedOnInvalidConfiguration(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		args  []string
+		token string
+		want  string
+	}{
+		{name: "missing token", args: []string{"-url", "https://provider.test", "-ca-file", "/ca.pem"}, want: "GITHUB_RUNNER_PROVIDER_TOKEN"},
+		{name: "plaintext URL", args: []string{"-url", "http://provider.test", "-ca-file", "/ca.pem"}, token: "provider-token", want: "HTTPS"},
+		{name: "missing CA", args: []string{"-url", "https://provider.test"}, token: "provider-token", want: "ca-file"},
+		{name: "CA control", args: []string{"-url", "https://provider.test", "-ca-file", "/ca.pem\nnext"}, token: "provider-token", want: "ca-file"},
+		{name: "CA DEL", args: []string{"-url", "https://provider.test", "-ca-file", "/ca.pem\x7f"}, token: "provider-token", want: "ca-file"},
+		{name: "CA noncanonical", args: []string{"-url", "https://provider.test", "-ca-file", "/tmp/../ca.pem"}, token: "provider-token", want: "ca-file"},
+		{name: "CA padded", args: []string{"-url", "https://provider.test", "-ca-file", " /ca.pem"}, token: "provider-token", want: "ca-file"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("GITHUB_RUNNER_PROVIDER_TOKEN", tc.token)
+			var stdout bytes.Buffer
+			err := runProviderProbe(t.Context(), tc.args, &stdout)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("probe err = %v want %q", err, tc.want)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("failed probe wrote stdout: %q", stdout.String())
+			}
+		})
+	}
+}
+
+func TestProviderProbeRejectsMoreThanRetainedConfigLabelLimit(t *testing.T) {
+	labels := make([]string, 65)
+	for index := range labels {
+		labels[index] = fmt.Sprintf("label-%d", index)
+	}
+	_, err := validateProviderProbeFlags(
+		"https://provider.test:18090", "/ca.pem", "GoCodeAlone", "GoCodeAlone/workflow-compute",
+		"dogfood-provider-target.yml", strings.Repeat("a", 40), "wfc-stg-ghp-linux-probe", "ephemeral", labels,
+	)
+	if err == nil || !strings.Contains(err.Error(), "64") {
+		t.Fatalf("oversized label set err = %v", err)
+	}
+}
+
+func TestProviderProbeRejectsUnknownResponseFieldsAndDoesNotEchoErrorBody(t *testing.T) {
+	const providerToken = "provider-secret-token"
+	for _, tc := range []struct {
+		name    string
+		handler http.HandlerFunc
+		want    string
+	}{
+		{
+			name: "unknown readiness field",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, `{"status":"ok","unexpected":true}`)
+			},
+			want: "invalid JSON",
+		},
+		{
+			name: "secret upstream error",
+			handler: func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "upstream rejected "+providerToken, http.StatusBadGateway)
+			},
+			want: "HTTP status 502",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewTLSServer(tc.handler)
+			defer server.Close()
+			caFile := writeProviderProbeTestCA(t, server)
+			t.Setenv("GITHUB_RUNNER_PROVIDER_TOKEN", providerToken)
+			var stdout bytes.Buffer
+			err := runProviderProbe(t.Context(), validProviderProbeTestArgs(server.URL, caFile), &stdout)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("probe err = %v want %q", err, tc.want)
+			}
+			if strings.Contains(err.Error(), providerToken) || stdout.Len() != 0 {
+				t.Fatalf("failed probe leaked output: err=%v stdout=%q", err, stdout.String())
+			}
+		})
+	}
+}
+
+func TestProviderProbeRejectsRedirectWithoutForwardingBearer(t *testing.T) {
+	const providerToken = "provider-secret-token"
+	redirected := false
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirected" {
+			redirected = true
+			if r.Header.Get("Authorization") == "Bearer "+providerToken {
+				t.Error("redirected request received provider bearer token")
+			}
+			_, _ = io.WriteString(w, `{"status":"ok"}`)
+			return
+		}
+		http.Redirect(w, r, "/redirected", http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+	caFile := writeProviderProbeTestCA(t, server)
+	client, err := newProviderProbeHTTPClient(caFile)
+	if err != nil {
+		t.Fatalf("build probe client: %v", err)
+	}
+	endpoint, err := url.Parse(server.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("parse probe endpoint: %v", err)
+	}
+	var response providerProbeReadyResponse
+	err = providerProbeJSON(t.Context(), client, http.MethodGet, endpoint, providerToken, nil, &response)
+	if err == nil || !strings.Contains(err.Error(), "redirect") {
+		t.Fatalf("redirect probe error = %v", err)
+	}
+	if redirected {
+		t.Fatal("provider probe followed redirect")
+	}
+}
+
+func TestProviderProbePreservesResponseReadFailure(t *testing.T) {
+	readErr := errors.New("response read sentinel")
+	client := &http.Client{Transport: providerProbeRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(iotest.ErrReader(readErr)),
+			Header:     make(http.Header),
+		}, nil
+	})}
+	endpoint, err := url.Parse("https://provider.test/readyz")
+	if err != nil {
+		t.Fatalf("parse probe endpoint: %v", err)
+	}
+	var response providerProbeReadyResponse
+	err = providerProbeJSON(t.Context(), client, http.MethodGet, endpoint, "provider-token", nil, &response)
+	if !errors.Is(err, readErr) || !strings.Contains(err.Error(), "read provider response") {
+		t.Fatalf("response read error = %v", err)
+	}
+}
+
+func writeProviderProbeTestCA(t *testing.T, server *httptest.Server) string {
+	t.Helper()
+	caFile := filepath.Join(t.TempDir(), "ca.pem")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: server.Certificate().Raw})
+	if err := os.WriteFile(caFile, caPEM, 0o600); err != nil {
+		t.Fatalf("write CA: %v", err)
+	}
+	return caFile
+}
+
+func validProviderProbeTestArgs(providerURL, caFile string) []string {
+	return []string{
+		"-url", providerURL,
+		"-ca-file", caFile,
+		"-organization", "GoCodeAlone",
+		"-repository", "GoCodeAlone/workflow-compute",
+		"-workflow", "dogfood-provider-target.yml",
+		"-ref", strings.Repeat("a", 40),
+		"-runner-name", "wfc-stg-ghp-linux-probe",
+		"-runner-group", "ephemeral",
+		"-label", "self-hosted",
 	}
 }
 
