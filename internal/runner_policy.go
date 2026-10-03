@@ -122,7 +122,7 @@ type policyGroup struct {
 
 type policyGroupPatch struct {
 	Name                     string   `json:"name"`
-	Visibility               string   `json:"visibility"`
+	Visibility               string   `json:"visibility,omitempty"`
 	AllowsPublicRepositories bool     `json:"allows_public_repositories"`
 	RestrictedToWorkflows    bool     `json:"restricted_to_workflows"`
 	SelectedWorkflows        []string `json:"selected_workflows"`
@@ -801,7 +801,12 @@ func (r *runnerPolicyReconciler) write(ctx context.Context, d RunnerPolicyDesire
 	switch step {
 	case 1:
 		g := after.Target.Group
-		_, err = r.client.request(ctx, http.MethodPatch, groupPath, policyGroupPatch{g.Name, g.Visibility, g.AllowsPublicRepositories, g.RestrictedToWorkflows, g.SelectedWorkflows}, nil, http.StatusOK)
+		patch := policyGroupPatch{g.Name, g.Visibility, g.AllowsPublicRepositories, g.RestrictedToWorkflows, g.SelectedWorkflows}
+		// Sending unchanged visibility can clear GitHub's selected repositories.
+		if g.Visibility == before.Target.Group.Visibility {
+			patch.Visibility = ""
+		}
+		_, err = r.client.request(ctx, http.MethodPatch, groupPath, patch, nil, http.StatusOK)
 	case 2:
 		_, err = r.client.request(ctx, http.MethodPut, groupPath+"/repositories", struct {
 			IDs []int64 `json:"selected_repository_ids"`

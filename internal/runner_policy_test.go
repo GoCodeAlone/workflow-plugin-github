@@ -42,6 +42,7 @@ type policyAPIFake struct {
 	interruptWrite  string
 	beforeWrite     bool
 	blockReads      bool
+	keepPatchRepos  bool
 }
 
 func newPolicyAPIFake(t *testing.T) *policyAPIFake {
@@ -84,10 +85,15 @@ func (f *policyAPIFake) serve(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == "PATCH" && path == "/orgs/GoCodeAlone/actions/runner-groups/2":
 			var patch struct {
-				Name string `json:"name"`
-				policyGroupPatch
+				Name                     string   `json:"name"`
+				Visibility               *string  `json:"visibility"`
+				AllowsPublicRepositories bool     `json:"allows_public_repositories"`
+				RestrictedToWorkflows    bool     `json:"restricted_to_workflows"`
+				SelectedWorkflows        []string `json:"selected_workflows"`
 			}
-			if json.NewDecoder(r.Body).Decode(&patch) != nil {
+			decoder := json.NewDecoder(r.Body)
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&patch) != nil {
 				w.WriteHeader(400)
 				return
 			}
@@ -95,7 +101,14 @@ func (f *policyAPIFake) serve(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusUnprocessableEntity)
 				return
 			}
-			f.group.Visibility, f.group.AllowsPublicRepositories, f.group.RestrictedToWorkflows, f.group.SelectedWorkflows = patch.Visibility, patch.AllowsPublicRepositories, patch.RestrictedToWorkflows, patch.SelectedWorkflows
+			if patch.Visibility != nil {
+				f.group.Visibility = *patch.Visibility
+				// Sending visibility resets selection even when its value is unchanged.
+				if !f.keepPatchRepos {
+					f.repoIDs = []int64{}
+				}
+			}
+			f.group.AllowsPublicRepositories, f.group.RestrictedToWorkflows, f.group.SelectedWorkflows = patch.AllowsPublicRepositories, patch.RestrictedToWorkflows, patch.SelectedWorkflows
 		case r.Method == "PUT" && path == "/orgs/GoCodeAlone/actions/runner-groups/2/repositories":
 			var put struct {
 				IDs []int64 `json:"selected_repository_ids"`
@@ -228,6 +241,138 @@ func TestRunnerPolicyGroupPatchPreservesRequiredName(t *testing.T) {
 	defer f.mu.Unlock()
 	if f.group.Name != "Ephemeral" {
 		t.Fatal("policy mutation renamed the runner group")
+	}
+}
+
+func TestRunnerPolicyVisibilityPatchSelectionAndResponseLoss(t *testing.T) {
+	for _, visibility := range []string{"selected", "all", "private"} {
+		for _, lost := range []string{"", "PATCH /orgs/GoCodeAlone/actions/runner-groups/2", "PUT /orgs/GoCodeAlone/actions/runner-groups/2/repositories"} {
+			if visibility == "selected" && strings.HasPrefix(lost, "PUT ") {
+				continue
+			}
+			t.Run(visibility+"/"+lost, func(t *testing.T) {
+				f := newPolicyAPIFake(t)
+				f.group.Visibility = visibility
+				f.repoIDs = []int64{17}
+				f.loseOnce = lost
+				dir := t.TempDir()
+				r := policyReconcilerFixture(t, f, dir)
+				if _, err := r.Plan(context.Background(), "visibility", runnerPolicyFixture()); err != nil {
+					t.Fatal(err)
+				}
+				result, err := r.Apply(context.Background(), "visibility")
+				if err != nil {
+					t.Fatalf("PATCH reset selected repository membership: %v; repos=%v writes=%v", err, f.repoIDs, f.writes)
+				}
+				if result.Phase != "applied" || !reflect.DeepEqual(f.repoIDs, []int64{17}) || f.variable == nil || !f.group.RestrictedToWorkflows {
+					t.Fatal("apply did not prove exact selection and variable readback")
+				}
+				writes := len(f.writes)
+				r = policyReconcilerFixture(t, f, dir)
+				if _, err := r.Apply(context.Background(), "visibility"); err != nil || len(f.writes) != writes {
+					t.Fatalf("confirmed response-loss retry repeated mutation: %v", err)
+				}
+				f.loseOnce = "DELETE /repos/GoCodeAlone/workflow-compute/actions/variables/WORKFLOW_COMPUTE_STAGING_URL"
+				result, err = r.Rollback(context.Background(), "visibility")
+				if err != nil || result.Phase != "rolled-back-restrictive" || f.variable != nil || !reflect.DeepEqual(f.repoIDs, []int64{17}) || f.group.Visibility != "selected" || !f.group.RestrictedToWorkflows {
+					t.Fatalf("rollback broadened or lost exact selection: %+v %v", result, err)
+				}
+				if _, err := policyReconcilerFixture(t, f, dir).Rollback(context.Background(), "visibility"); err != nil || len(f.writes) != writes+1 {
+					t.Fatalf("response-loss rollback retry repeated mutation: %v", err)
+				}
+				patches, puts := 0, 0
+				for _, write := range f.writes {
+					switch write {
+					case "PATCH /orgs/GoCodeAlone/actions/runner-groups/2":
+						patches++
+					case "PUT /orgs/GoCodeAlone/actions/runner-groups/2/repositories":
+						puts++
+					}
+				}
+				wantPuts := 1
+				if visibility == "selected" {
+					wantPuts = 0
+				}
+				if patches != 1 || puts != wantPuts {
+					t.Fatalf("unexpected mutation sequence: patches=%d puts=%d wantPuts=%d", patches, puts, wantPuts)
+				}
+			})
+		}
+	}
+}
+
+func TestRunnerPolicyVisibilityTransitionUnexpectedSelectionDenied(t *testing.T) {
+	for _, visibility := range []string{"all", "private"} {
+		t.Run(visibility, func(t *testing.T) {
+			f := newPolicyAPIFake(t)
+			f.group.Visibility = visibility
+			f.repoIDs = []int64{17}
+			f.keepPatchRepos = true
+			dir := t.TempDir()
+			r := policyReconcilerFixture(t, f, dir)
+			if _, err := r.Plan(context.Background(), "unmodeled", runnerPolicyFixture()); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Apply(context.Background(), "unmodeled"); err == nil || !strings.Contains(err.Error(), "readback does not equal") {
+				t.Fatalf("unmodeled selection after visibility transition accepted: %v", err)
+			}
+			if len(f.writes) != 1 || f.variable != nil {
+				t.Fatal("unmodeled visibility readback reached repository or variable write")
+			}
+			r = policyReconcilerFixture(t, f, dir)
+			if _, err := r.Apply(context.Background(), "unmodeled"); err == nil {
+				t.Fatal("unmodeled interrupted state was accepted on retry")
+			}
+			if _, err := r.Rollback(context.Background(), "unmodeled"); err == nil || len(f.writes) != 1 {
+				t.Fatal("rollback accepted unmodeled interrupted state")
+			}
+		})
+	}
+}
+
+func TestRunnerPolicyInterruptedSelectionResetRemainsDenied(t *testing.T) {
+	f := newPolicyAPIFake(t)
+	f.repoIDs = []int64{17}
+	dir := t.TempDir()
+	r := policyReconcilerFixture(t, f, dir)
+	d := runnerPolicyFixture()
+	if _, err := r.Plan(context.Background(), "reset", d); err != nil {
+		t.Fatal(err)
+	}
+	root, err := r.openAudit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = root.Close() }()
+	plan, _, err := r.load(root, "reset")
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := *plan.Before
+	after.Target.Group = policyDesiredState(*plan.Before, d).Target.Group
+	hash, err := policyHash(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intent := runnerPolicyEvent{TransactionID: "reset", Phase: "write-intent", Step: 1, Before: plan.Before, After: &after, BeforeHash: plan.BeforeHash, AfterHash: hash}
+	if err := r.append(root, intent); err != nil {
+		t.Fatal(err)
+	}
+	f.group = after.Target.Group
+	f.repoIDs = []int64{}
+	path := filepath.Join(dir, runnerPolicyAuditFile)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range []func(context.Context, string) (RunnerPolicyResult, error){r.Apply, r.Rollback} {
+		if _, err := operation(context.Background(), "reset"); err == nil || !strings.Contains(err.Error(), "unrecognized readback") {
+			t.Fatalf("released interrupted reset state was rebound or auto-repaired: %v", err)
+		}
+	}
+	journal, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(journal, before) || len(f.writes) != 0 || f.variable != nil {
+		t.Fatal("denial changed journal authority or API state")
 	}
 }
 
