@@ -6,7 +6,7 @@
     "license": "MIT",
     "type": "external",
     "tier": "community",
-    "minEngineVersion": "0.61.0",
+    "minEngineVersion": "0.86.0",
     "required_secrets": [
         {
             "name": "GITHUB_APP_PRIVATE_KEY",
@@ -22,27 +22,27 @@
         {
             "os": "linux",
             "arch": "amd64",
-            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-linux-amd64.tar.gz"
+            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v0.0.0/github-linux-amd64.tar.gz"
         },
         {
             "os": "linux",
             "arch": "arm64",
-            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-linux-arm64.tar.gz"
+            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v0.0.0/github-linux-arm64.tar.gz"
         },
         {
             "os": "darwin",
             "arch": "amd64",
-            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-darwin-amd64.tar.gz"
+            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v0.0.0/github-darwin-amd64.tar.gz"
         },
         {
             "os": "darwin",
             "arch": "arm64",
-            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-darwin-arm64.tar.gz"
+            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v0.0.0/github-darwin-arm64.tar.gz"
         },
         {
             "os": "windows",
             "arch": "amd64",
-            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v1.0.1/workflow-plugin-github-windows-amd64.tar.gz"
+            "url": "https://github.com/GoCodeAlone/workflow-plugin-github/releases/download/v0.0.0/github-windows-amd64.tar.gz"
         }
     ],
     "moduleTypes": ["git.webhook", "github.app", "github.runner_provider"],
@@ -66,6 +66,7 @@
     ],
     "triggerTypes": [],
     "capabilities": {
+        "cliCommands": [{"name": "github", "description": "Audited GitHub runner policy reconciliation", "flagsPassthrough": true}],
         "configProvider": false,
         "moduleTypes": ["git.webhook", "github.app", "github.runner_provider"],
         "stepTypes": [

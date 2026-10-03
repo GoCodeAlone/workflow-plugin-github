@@ -38,7 +38,7 @@ func (p *githubPlugin) Manifest() sdk.PluginManifest {
 		Name:        "workflow-plugin-github",
 		Version:     Version,
 		Author:      "GoCodeAlone",
-		Description: "GitHub integration plugin: webhook handling, GitHub Actions, PRs, issues, releases, and deployments",
+		Description: "GitHub integration plugin: webhook handling, GitHub Actions, PRs, issues, releases, deployments, and audited runner policy CLI",
 	}
 }
 

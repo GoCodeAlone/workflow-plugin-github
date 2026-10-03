@@ -3,6 +3,7 @@ package githubplugin
 import (
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -23,6 +24,9 @@ var githubRunnerConfigSchemaDocument []byte
 //go:embed schemas/github-runner-ephemeral-job-output.schema.json
 var githubRunnerOutputSchemaDocument []byte
 
+//go:embed schemas/github-runner-policy.schema.json
+var githubRunnerPolicySchemaDocument []byte
+
 var (
 	githubRunnerInputSchemaOnce  sync.Once
 	githubRunnerInputSchema      *jsonschema.Schema
@@ -33,7 +37,25 @@ var (
 	githubRunnerOutputSchemaOnce sync.Once
 	githubRunnerOutputSchema     *jsonschema.Schema
 	githubRunnerOutputSchemaErr  error
+	githubRunnerPolicySchemaOnce sync.Once
+	githubRunnerPolicySchema     *jsonschema.Schema
+	githubRunnerPolicySchemaErr  error
 )
+
+// ValidateRunnerPolicyDocument validates the CLI JSON document, not a runtime grant.
+func ValidateRunnerPolicyDocument(data json.RawMessage) error {
+	githubRunnerPolicySchemaOnce.Do(func() {
+		githubRunnerPolicySchema, githubRunnerPolicySchemaErr = compileEmbeddedSchema("schema://github/runner-policy/v1", githubRunnerPolicySchemaDocument)
+	})
+	if githubRunnerPolicySchemaErr != nil {
+		return errors.New("embedded runner policy schema could not be compiled")
+	}
+	var value any
+	if json.Unmarshal(data, &value) != nil || githubRunnerPolicySchema.Validate(value) != nil {
+		return errors.New("runner policy does not match its strict schema")
+	}
+	return nil
+}
 
 func ValidateGitHubRunnerProviderConfig(config providercontract.Config) error {
 	return ValidateGitHubRunnerProviderConfigValue(config)

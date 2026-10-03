@@ -1,5 +1,6 @@
 {
   "version": "1",
+  "protocolTypes": [{"name": "GitHubRunnerPolicy", "wire": "json", "schemaRef": "schemas/github-runner-policy.schema.json", "protocolVersion": "github-runner-policy.v1", "commands": ["github runner-policy reconcile plan", "github runner-policy reconcile apply", "github runner-policy reconcile rollback"]}],
   "contracts": [
     {
       "kind": "module",

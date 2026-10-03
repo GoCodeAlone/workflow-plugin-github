@@ -1,17 +1,186 @@
 package githubplugin_test
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GoCodeAlone/workflow-plugin-github/internal/retainedprovider"
+	engineplugin "github.com/GoCodeAlone/workflow/plugin"
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"gopkg.in/yaml.v3"
 )
+
+func TestGitHubCLIReleaseArchiveMatrix(t *testing.T) {
+	base := os.Getenv("GITHUB_PACKAGING_PROOF_DIR")
+	if base == "" {
+		t.Skip("set GITHUB_PACKAGING_PROOF_DIR for the full GoReleaser archive proof")
+	}
+	if err := os.MkdirAll(base, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(base, "matrix-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderDir, err := os.MkdirTemp(".", ".goreleaser-proof-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(renderDir) })
+	source, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config yaml.Node
+	if err := yaml.Unmarshal(source, &config); err != nil {
+		t.Fatal(err)
+	}
+	config.Content[0].Content = append(config.Content[0].Content, &yaml.Node{Kind: yaml.ScalarNode, Value: "dist"}, &yaml.Node{Kind: yaml.ScalarNode, Value: filepath.Join(dir, "dist")})
+	data, err := yaml.Marshal(&config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "goreleaser.yaml")
+	if err := os.WriteFile(configPath, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "goreleaser", "release", "--snapshot", "--clean", "--parallelism", "2", "--config", configPath)
+	cmd.Env = append(os.Environ(), "GORELEASER_RENDER_DIR="+filepath.Clean(renderDir))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("actual GoReleaser archive matrix failed: %v\n%s", err, out)
+	}
+	for _, platform := range []string{"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64", "windows-amd64", "windows-arm64"} {
+		path := filepath.Join(dir, "dist", "github-"+platform+".tar.gz")
+		file, err := os.Open(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		reader, err := gzip.NewReader(file)
+		if err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		tarReader := tar.NewReader(reader)
+		binaries := 0
+		manifestFound := false
+		for {
+			header, err := tarReader.Next()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if header.Name == "github" || header.Name == "github.exe" {
+				binaries++
+			} else if header.Mode&0111 != 0 && header.Typeflag == tar.TypeReg {
+				t.Fatalf("unexpected executable in %s: %s", platform, header.Name)
+			}
+			if header.Name == "plugin.json" {
+				var manifest struct {
+					Version   string `json:"version"`
+					Downloads []struct {
+						URL string `json:"url"`
+					} `json:"downloads"`
+				}
+				if err := json.NewDecoder(tarReader).Decode(&manifest); err != nil {
+					t.Fatal(err)
+				}
+				if manifest.Version == "0.0.0" || manifest.Version == "" {
+					t.Fatal("archive manifest version was not rendered")
+				}
+				if _, err := engineplugin.ParseSemver(manifest.Version); err != nil {
+					t.Fatalf("archive manifest version is not accepted by the released Workflow host: %v", err)
+				}
+				for _, download := range manifest.Downloads {
+					if !strings.Contains(download.URL, "/download/v"+manifest.Version+"/github-") {
+						t.Fatal("archive download URL did not bind the rendered version and dedicated CLI asset")
+					}
+				}
+				manifestFound = true
+			}
+		}
+		if err := reader.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if binaries != 1 || !manifestFound {
+			t.Fatalf("archive %s does not have one entrypoint and normalized manifest", platform)
+		}
+		t.Logf("archive=%s", path)
+	}
+	t.Logf("proof_dir=%s", dir)
+}
+
+func TestGitHubCLIReleaseIsSingleEntrypoint(t *testing.T) {
+	data, err := os.ReadFile(".goreleaser.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var release struct {
+		Builds   []struct{ ID, Main, Binary string }
+		Archives []struct {
+			ID    string
+			IDs   []string `yaml:"ids"`
+			Files []any
+		}
+	}
+	if err := yaml.Unmarshal(data, &release); err != nil {
+		t.Fatal(err)
+	}
+	foundBuild, foundArchive := false, false
+	for _, build := range release.Builds {
+		if build.ID == "github-cli" {
+			foundBuild = build.Main == "./cmd/workflow-plugin-github" && build.Binary == "github"
+		}
+	}
+	for _, archive := range release.Archives {
+		if archive.ID == "github-cli" {
+			foundArchive = len(archive.IDs) == 1 && archive.IDs[0] == "github-cli"
+		}
+	}
+	if !foundBuild || !foundArchive {
+		t.Fatal("release must have a dedicated single-entry github CLI archive")
+	}
+	data, err = os.ReadFile("plugin.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Capabilities struct {
+			CLICommands []struct{ Name string } `json:"cliCommands"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Capabilities.CLICommands) != 1 || manifest.Capabilities.CLICommands[0].Name != "github" {
+		t.Fatal("manifest must contribute only top-level github")
+	}
+	data, err = os.ReadFile("cmd/workflow-plugin-github/main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(data, []byte("sdk.ServePluginFull(")) {
+		t.Fatal("entrypoint must use sdk.ServePluginFull")
+	}
+}
 
 func TestReleaseArchiveIncludesGitHubRunnerProvider(t *testing.T) {
 	data, err := os.ReadFile(".goreleaser.yaml")

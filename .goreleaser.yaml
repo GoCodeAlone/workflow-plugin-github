@@ -2,6 +2,9 @@ version: 2
 
 project_name: workflow-plugin-github
 
+snapshot:
+  version_template: "{{ .Version }}"
+
 before:
   hooks:
     - go mod tidy -diff
@@ -11,9 +14,19 @@ before:
     - 'cp plugin.json "{{ .Env.GORELEASER_RENDER_DIR }}/plugin.json"'
     - 'cp contracts/github-runner-provider.json "{{ .Env.GORELEASER_RENDER_DIR }}/contracts/github-runner-provider.json"'
     - "sed -i.bak 's/\"version\": \".*\"/\"version\": \"{{ .Version }}\"/' \"{{ .Env.GORELEASER_RENDER_DIR }}/plugin.json\" && rm -f \"{{ .Env.GORELEASER_RENDER_DIR }}/plugin.json.bak\""
+    - "sed -i.bak 's#/download/v[^/]*/#/download/v{{ .Version }}/#g' \"{{ .Env.GORELEASER_RENDER_DIR }}/plugin.json\" && rm -f \"{{ .Env.GORELEASER_RENDER_DIR }}/plugin.json.bak\""
     - "sed -i.bak 's/\"version\": \"v.*\"/\"version\": \"v{{ .Version }}\"/' \"{{ .Env.GORELEASER_RENDER_DIR }}/contracts/github-runner-provider.json\" && rm -f \"{{ .Env.GORELEASER_RENDER_DIR }}/contracts/github-runner-provider.json.bak\""
 
 builds:
+  - id: github-cli
+    main: ./cmd/workflow-plugin-github
+    binary: github
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X github.com/GoCodeAlone/workflow-plugin-github/internal.Version={{.Version}}
   - id: workflow-plugin-github
     main: ./cmd/workflow-plugin-github
     binary: workflow-plugin-github
@@ -57,6 +70,16 @@ builds:
       - arm64
 
 archives:
+  - id: github-cli
+    ids: [github-cli]
+    name_template: "github-{{ .Os }}-{{ .Arch }}"
+    files:
+      - src: "{{ .Env.GORELEASER_RENDER_DIR }}/plugin.json"
+        dst: plugin.json
+      - plugin.contracts.json
+      - schemas/github-runner-policy.schema.json
+      - README.md
+      - LICENSE
   - id: workflow-plugin-github
     allow_different_binary_count: true
     ids:
