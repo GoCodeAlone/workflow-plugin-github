@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schema://github/runner-policy/v1",
+  "title": "GitHub Runner Policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "organization", "runner_group", "repository", "workflow", "visibility", "allows_public_repositories", "restricted_to_workflows", "runner_ids", "protected_runner_ids", "variable"],
+  "properties": {
+    "schema_version": {"const": "github-runner-policy.v1"},
+    "organization": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$"},
+    "runner_group": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$", "not": {"pattern": "^[Dd][Ee][Ff][Aa][Uu][Ll][Tt]$"}},
+    "repository": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$"},
+    "workflow": {"type": "string", "minLength": 1, "maxLength": 512},
+    "visibility": {"const": "selected"},
+    "allows_public_repositories": {"const": false},
+    "restricted_to_workflows": {"const": true},
+    "runner_ids": {"type": "array", "maxItems": 0},
+    "protected_runner_ids": {"type": "array", "maxItems": 100, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}},
+    "variable": {
+      "type": "object", "additionalProperties": false, "required": ["name", "value"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Z_][A-Z0-9_]{0,99}$"},
+        "value": {"type": "string", "maxLength": 2048, "pattern": "^https://[^\\s?#@]+$"}
+      }
+    }
+  }
+}
