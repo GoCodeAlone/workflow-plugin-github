@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	goversion "go/version"
 	"io"
 	"os"
 	"os/exec"
@@ -505,6 +506,111 @@ func TestReleaseDependencyCheckDoesNotMutateTrackedModules(t *testing.T) {
 	}
 	if strings.Contains(hooks, "- go mod tidy\n") {
 		t.Fatal("release hooks must not mutate tracked module files")
+	}
+}
+
+func compilerHasHTTP2WindowFix(v string) bool {
+	if !goversion.IsValid(v) {
+		return false
+	}
+	if goversion.Compare(v, "go1.27") >= 0 {
+		return goversion.Compare(v, "go1.27.2") >= 0
+	}
+	return goversion.Compare(v, "go1.26.9") >= 0
+}
+
+func TestCompilerHTTP2WindowFixFloors(t *testing.T) {
+	for v, want := range map[string]bool{
+		"go1.26.8": false, "go1.26.9": true, "go1.26.10": true,
+		"go1.27.0": false, "go1.27.1": false, "go1.27.2": true,
+		"go1.27.3": true, "go1.27rc1": false, "invalid": false,
+	} {
+		if got := compilerHasHTTP2WindowFix(v); got != want {
+			t.Errorf("compilerHasHTTP2WindowFix(%q) = %v, want %v", v, got, want)
+		}
+	}
+}
+
+func moduleToolchainsHaveHTTP2Fix(data []byte) bool {
+	moduleGo := ""
+	for _, line := range strings.Split(string(data), "\n") {
+		line, _, _ = strings.Cut(line, "//")
+		fields := strings.Fields(line)
+		if len(fields) == 2 && (fields[0] == "go" || fields[0] == "toolchain") {
+			v := fields[1]
+			if fields[0] == "go" {
+				v = "go" + v
+				moduleGo = v
+			}
+			if !compilerHasHTTP2WindowFix(v) {
+				return false
+			}
+		}
+	}
+	return moduleGo != ""
+}
+
+func TestModuleToolchainsHTTP2FixFloors(t *testing.T) {
+	for _, tc := range []struct {
+		module string
+		fixed  bool
+	}{
+		{"go 1.26.9 // patched baseline\n", true},
+		{"go 1.26.8 // old baseline\n", false},
+		{"go 1.26.9\ntoolchain go1.27.1 // preferred compiler\n", false},
+		{"go 1.26.9\ntoolchain go1.27.2 // patched compiler\n", true},
+		{"toolchain go1.27.2\n", false},
+	} {
+		if got := moduleToolchainsHaveHTTP2Fix([]byte(tc.module)); got != tc.fixed {
+			t.Errorf("moduleToolchainsHaveHTTP2Fix(%q) = %v, want %v", tc.module, got, tc.fixed)
+		}
+	}
+}
+
+func TestBuildWorkflowsUsePatchedModuleToolchain(t *testing.T) {
+	data, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !moduleToolchainsHaveHTTP2Fix(data) {
+		t.Fatal("go.mod must select only compilers satisfying GO-2026-6611's branch-specific fix floors")
+	}
+	for path, requiredJobs := range map[string][]string{
+		".github/workflows/ci.yml":      {"test", "windows-provider-journal"},
+		".github/workflows/release.yml": {"release", "publish-runner-job-image"},
+	} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var workflow struct {
+			Jobs map[string]struct {
+				Steps []struct {
+					Uses string
+					With struct {
+						GoVersionFile string `yaml:"go-version-file"`
+						GoVersion     string `yaml:"go-version"`
+					}
+				}
+			}
+		}
+		if err := yaml.Unmarshal(data, &workflow); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range requiredJobs {
+			selected := 0
+			for _, step := range workflow.Jobs[name].Steps {
+				if strings.HasPrefix(step.Uses, "actions/setup-go@") {
+					selected++
+					if step.With.GoVersionFile != "go.mod" || step.With.GoVersion != "" {
+						t.Fatalf("%s job %s must select Go from go.mod without a literal version override", path, name)
+					}
+				}
+			}
+			if selected != 1 {
+				t.Fatalf("%s job %s must select exactly one module-bound Go toolchain", path, name)
+			}
+		}
 	}
 }
 
