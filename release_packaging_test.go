@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"debug/buildinfo"
 	"encoding/json"
 	"fmt"
 	goversion "go/version"
@@ -12,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -34,11 +36,7 @@ func TestGitHubCLIReleaseArchiveMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	renderDir, err := os.MkdirTemp(".", ".goreleaser-proof-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(renderDir) })
+	renderDir := newReleaseProofRenderDir(t, ".")
 	source, err := os.ReadFile(".goreleaser.yaml")
 	if err != nil {
 		t.Fatal(err)
@@ -56,6 +54,10 @@ func TestGitHubCLIReleaseArchiveMatrix(t *testing.T) {
 	if err := os.WriteFile(configPath, data, 0600); err != nil {
 		t.Fatal(err)
 	}
+	revision := releaseProofGit(t, ".", "rev-parse", "--verify", "HEAD")
+	if status := releaseProofGit(t, ".", "status", "--porcelain", "--untracked-files=all"); status != "" {
+		t.Fatalf("archive qualification requires a clean committed checkout before building:\n%s", status)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "goreleaser", "release", "--snapshot", "--clean", "--parallelism", "2", "--config", configPath)
@@ -63,6 +65,12 @@ func TestGitHubCLIReleaseArchiveMatrix(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("actual GoReleaser archive matrix failed: %v\n%s", err, out)
+	}
+	if status := releaseProofGit(t, ".", "status", "--porcelain", "--untracked-files=all"); status != "" {
+		t.Fatalf("archive rendering dirtied the checkout:\n%s", status)
+	}
+	if current := releaseProofGit(t, ".", "rev-parse", "--verify", "HEAD"); current != revision {
+		t.Fatalf("source HEAD changed during archive build: got %s, want %s", current, revision)
 	}
 	for _, platform := range []string{"linux-amd64", "linux-arm64", "darwin-amd64", "darwin-arm64", "windows-amd64", "windows-arm64"} {
 		path := filepath.Join(dir, "dist", "github-"+platform+".tar.gz")
@@ -124,9 +132,185 @@ func TestGitHubCLIReleaseArchiveMatrix(t *testing.T) {
 		if binaries != 1 || !manifestFound {
 			t.Fatalf("archive %s does not have one entrypoint and normalized manifest", platform)
 		}
+		ext := ""
+		if strings.HasPrefix(platform, "windows-") {
+			ext = ".exe"
+		}
+		checkReleaseArchiveVCS(t, path, revision, []string{"github" + ext})
+		providerBinaries := []string{"workflow-plugin-github" + ext, "github-runner-provider" + ext}
+		if strings.HasPrefix(platform, "linux-") {
+			providerBinaries = append(providerBinaries, "github-actions-runner-job")
+		}
+		checkReleaseArchiveVCS(t, filepath.Join(dir, "dist", "workflow-plugin-github-"+platform+".tar.gz"), revision, providerBinaries)
 		t.Logf("archive=%s", path)
 	}
 	t.Logf("proof_dir=%s", dir)
+}
+
+func newReleaseProofRenderDir(t *testing.T, root string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp(root, ".goreleaser-rendered-proof-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
+
+func releaseProofGit(t *testing.T, root string, args ...string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v: %v\n%s", args, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func TestReleaseProofRenderOutputsStayIgnored(t *testing.T) {
+	repo := t.TempDir()
+	template := t.TempDir()
+	releaseProofGit(t, repo, "init", "--quiet", "--template="+template)
+	ignore, err := os.ReadFile(".gitignore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".gitignore"), ignore, 0600); err != nil {
+		t.Fatal(err)
+	}
+	emptyIgnore := filepath.Join(t.TempDir(), "empty-ignore")
+	if err := os.WriteFile(emptyIgnore, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	releaseProofGit(t, repo, "config", "core.excludesFile", emptyIgnore)
+	renderDir := newReleaseProofRenderDir(t, repo)
+	if err := os.WriteFile(filepath.Join(renderDir, "plugin.json"), []byte(`{"version":"1.0.34"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(repo, renderDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status := releaseProofGit(t, repo, "status", "--porcelain", "--untracked-files=all", "--", relative); status != "" {
+		t.Fatalf("generated release render files must not mark the checkout dirty:\n%s", status)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "must-stay-visible.txt"), nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if status := releaseProofGit(t, repo, "status", "--porcelain", "--", "must-stay-visible.txt"); !strings.HasPrefix(status, "?? ") {
+		t.Fatalf("unrelated untracked changes must remain visible, got %q", status)
+	}
+}
+
+func releaseBinaryVCS(info *debug.BuildInfo, revision string) error {
+	if info == nil || revision == "" {
+		return fmt.Errorf("missing binary build information or expected revision")
+	}
+	want := map[string]string{"vcs": "git", "vcs.revision": revision, "vcs.modified": "false"}
+	seen := make(map[string]string)
+	for _, setting := range info.Settings {
+		if _, required := want[setting.Key]; !required {
+			continue
+		}
+		if _, duplicate := seen[setting.Key]; duplicate {
+			return fmt.Errorf("duplicate %s build setting", setting.Key)
+		}
+		seen[setting.Key] = setting.Value
+	}
+	for _, key := range []string{"vcs", "vcs.revision", "vcs.modified"} {
+		if value, present := seen[key]; !present || value != want[key] {
+			return fmt.Errorf("%s = %q (present=%t), want %q", key, value, present, want[key])
+		}
+	}
+	return nil
+}
+
+func TestReleaseBinaryVCSRejectsUnprovedProvenance(t *testing.T) {
+	revision := strings.Repeat("a", 40)
+	valid := []debug.BuildSetting{{Key: "vcs", Value: "git"}, {Key: "vcs.revision", Value: revision}, {Key: "vcs.modified", Value: "false"}}
+	for _, tc := range []struct {
+		name     string
+		settings []debug.BuildSetting
+		wantErr  bool
+	}{
+		{"clean matching source", valid, false},
+		{"dirty", append(append([]debug.BuildSetting{}, valid[:2]...), debug.BuildSetting{Key: "vcs.modified", Value: "true"}), true},
+		{"wrong revision", []debug.BuildSetting{{Key: "vcs", Value: "git"}, {Key: "vcs.revision", Value: strings.Repeat("b", 40)}, {Key: "vcs.modified", Value: "false"}}, true},
+		{"missing modified", valid[:2], true},
+		{"missing revision", []debug.BuildSetting{valid[0], valid[2]}, true},
+		{"missing vcs", valid[1:], true},
+		{"buildvcs disabled", nil, true},
+		{"noncanonical modified", []debug.BuildSetting{valid[0], valid[1], {Key: "vcs.modified", Value: "False"}}, true},
+		{"duplicate modified", append(append([]debug.BuildSetting{}, valid...), valid[2]), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := releaseBinaryVCS(&debug.BuildInfo{Settings: tc.settings}, revision); (err != nil) != tc.wantErr {
+				t.Fatalf("releaseBinaryVCS() = %v, want error=%t", err, tc.wantErr)
+			}
+		})
+	}
+	if err := releaseBinaryVCS(nil, revision); err == nil {
+		t.Fatal("missing build info must fail closed")
+	}
+	if err := releaseBinaryVCS(&debug.BuildInfo{Settings: valid}, ""); err == nil {
+		t.Fatal("missing expected source revision must fail closed")
+	}
+}
+
+func checkReleaseArchiveVCS(t *testing.T, path, revision string, binaries []string) {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	want, seen := make(map[string]bool), make(map[string]bool)
+	for _, name := range binaries {
+		want[name] = true
+	}
+	entries := tar.NewReader(reader)
+	for {
+		header, err := entries.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !want[header.Name] {
+			continue
+		}
+		regular := header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA
+		if seen[header.Name] || !regular || header.Size <= 0 || header.Size > 256<<20 {
+			t.Fatalf("invalid or duplicate binary member %q in %s", header.Name, path)
+		}
+		data, err := io.ReadAll(io.LimitReader(entries, header.Size))
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := buildinfo.Read(bytes.NewReader(data))
+		if err != nil {
+			t.Fatalf("read binary build info %s/%s: %v", path, header.Name, err)
+		}
+		if err := releaseBinaryVCS(info, revision); err != nil {
+			t.Fatalf("unqualified archive binary %s/%s: %v", path, header.Name, err)
+		}
+		seen[header.Name] = true
+		t.Logf("archive_binary=%s/%s vcs.revision=%s vcs.modified=false", path, header.Name, revision)
+	}
+	for _, name := range binaries {
+		if !seen[name] {
+			t.Fatalf("missing archive binary %s/%s", path, name)
+		}
+	}
 }
 
 func TestGitHubCLIReleaseIsSingleEntrypoint(t *testing.T) {
