@@ -25,6 +25,10 @@ jobs:
         env:
           GOPRIVATE: github.com/GoCodeAlone/*
           GONOSUMCHECK: github.com/GoCodeAlone/*
+      - name: Qualify unpublished runner-job image
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        timeout-minutes: 25
+        run: bash .github/scripts/qualify-runner-image.sh
   windows-provider-journal:
     runs-on: windows-latest
     permissions:

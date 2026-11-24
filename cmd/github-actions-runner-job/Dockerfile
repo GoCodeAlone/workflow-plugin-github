@@ -1,3 +1,5 @@
+FROM docker.io/library/golang:1.27.2-bookworm@sha256:5cf287a799e6b94384bad13d16b14904c531f51ba65792237e122ce42b392f61 AS go-toolchain
+
 FROM mcr.microsoft.com/dotnet/runtime-deps:8.0-jammy
 
 ARG TARGETARCH
@@ -29,6 +31,9 @@ RUN set -eux; \
 
 COPY --chmod=0755 ${RUNNER_JOB_BINARY} /usr/local/bin/github-actions-runner-job
 COPY --chmod=0755 cmd/github-actions-runner-job/entrypoint.sh /usr/local/bin/github-actions-runner-job-entrypoint
+
+COPY --from=go-toolchain /usr/local/go/ /usr/local/go/
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 USER runner
 WORKDIR /workspace
